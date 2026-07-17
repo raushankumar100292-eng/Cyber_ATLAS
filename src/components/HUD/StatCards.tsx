@@ -22,9 +22,10 @@ function Card({ label, value, color, icon }: CardProps) {
 }
 
 export default function StatCards() {
-  const eventCount = useStore(s => s.eventCount)
-  const blockedCount = useStore(s => s.blockedCount)
-  const criticalCount = useStore(s => s.criticalCount)
+  const alertQueue = useStore(s => s.alertQueue)
+  const eventCount = alertQueue.length
+  const blockedCount = alertQueue.filter(a => a.status === 'dismissed').length
+  const criticalCount = alertQueue.filter(a => a.severity === 'CRITICAL').length
 
   return (
     <>

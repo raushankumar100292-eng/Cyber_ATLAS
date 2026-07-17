@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as XLSX from 'xlsx'
 import {
@@ -8,6 +8,7 @@ import {
   X, Check, RefreshCw, FileCode2,
   Shield, Zap, AlertCircle, Info, BookOpen, CornerDownRight,
   Upload, PlayCircle, StopCircle, FileSpreadsheet, ChevronRight,
+  Eye, KeyRound,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '../../lib/store'

@@ -77,7 +77,7 @@ function detectCampaigns(alerts: AlertQueueItem[]): Campaign[] {
       if (attrs.length > 0) {
         union(alerts[i].id, alerts[j].id);
         const key = `${alerts[i].id}|${alerts[j].id}`;
-        edges.set(key, new Map(attrs.map(a => [a.type, a])));
+        edges.set(key, new Map(attrs.map(a => [a.type, [a]] as [string, SharedAttr[]])));
       }
     }
   }

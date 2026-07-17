@@ -4,7 +4,7 @@ import {
   Zap, GitBranch, Play, CheckCircle2, Clock, AlertTriangle,
   ArrowRight, Plus, Settings, Activity, Shield, RefreshCw,
   ChevronDown, ChevronRight, Code2, Database, Globe, Bell,
-  Sparkles, Trash2,
+  Sparkles, Trash2, Eye,
 } from 'lucide-react'
 import PlaybookBuilder, { type GeneratedPlaybook } from './PlaybookBuilder'
 import { useStore } from '../../lib/store'

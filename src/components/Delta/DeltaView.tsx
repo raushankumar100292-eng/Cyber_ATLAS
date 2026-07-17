@@ -3,7 +3,7 @@ import {
   Upload, FileSpreadsheet, X, CheckCircle2, AlertCircle,
   ArrowRight, ArrowRightLeft, Plus, Minus,
   RefreshCw, ChevronDown, ChevronUp,
-  FileDown, Table2, Send, Bot,
+  FileDown, Table2, Send, Bot, Eye, KeyRound,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as XLSX from 'xlsx'
@@ -162,7 +162,7 @@ ${patterns}
 // ── Excel download helper ────────────────────────────────────────────────────
 function downloadXlsx(wb: XLSX.WorkBook, filename: string) {
   const data = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as Uint8Array
-  const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const blob = new Blob([data.buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url  = URL.createObjectURL(blob)
   const a    = document.createElement('a')
   a.href = url; a.download = filename; a.style.display = 'none'

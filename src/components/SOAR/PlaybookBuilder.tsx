@@ -105,7 +105,7 @@ interface TooltipInfo {
 interface FlowDiagramProps {
   flow: PlaybookFlow
   horizontal: boolean
-  svgRef: React.RefObject<SVGSVGElement | null>
+  svgRef: React.RefObject<SVGSVGElement>
   positions: Map<string, { x: number; y: number }>
   onNodeMove: (id: string, pos: { x: number; y: number }) => void
 }
@@ -225,7 +225,7 @@ function FlowDiagram({ flow, horizontal, svgRef, positions, onNodeMove }: FlowDi
       onMouseUp={onMouseUp}
       onMouseLeave={() => { onMouseUp(); setTooltip(null) }}>
 
-      <svg ref={svgRef} width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}
+      <svg ref={svgRef as React.Ref<SVGSVGElement>} width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}
         style={{ display: 'block', fontFamily: "'Inter', system-ui, sans-serif" }}>
         <defs>
           {['default', 'yes', 'no'].map(k => (

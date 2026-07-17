@@ -1,11 +1,19 @@
+import { useState } from 'react'
 import { useStore } from '../../lib/store'
 import { severityColor, statusColor } from '../../lib/theme'
 
 export default function ThreatFeed() {
-  const allEvents = useStore(s => s.events)
-  const events = allEvents.slice(0, 24)
-  const feedPaused = useStore(s => s.feedPaused)
-  const toggleFeed = useStore(s => s.toggleFeed)
+  const alertQueue = useStore(s => s.alertQueue)
+  const events = alertQueue.slice(0, 24).map(a => ({
+    id: a.id,
+    srcCity: a.sourceHost || a.sourceIp,
+    dstCity: a.destHost || String(a.destPort),
+    severity: a.severity.toLowerCase() as keyof typeof severityColor,
+    techniqueName: a.techniqueName,
+    status: a.status,
+  }))
+  const [feedPaused, setFeedPaused] = useState(false)
+  const toggleFeed = () => setFeedPaused(p => !p)
 
   const doubled = [...events, ...events]
 

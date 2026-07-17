@@ -100,13 +100,14 @@ const ROLES: { id: Role; label: string; description: string }[] = [
 
 // Landing view for each role — used for Ctrl+Click new-tab
 const ROLE_VIEW: Record<Role, ViewMode> = {
-  soc:          'globe',
-  detection:    'spl-kql',
-  soar:         'soar',
-  purple:       'agentic-soc',
-  architect:    'architect',
-  'alert-gen':  'alert-gen',
-  'prompt-eng': 'prompt-eng',
+  soc:           'globe',
+  detection:     'spl-kql',
+  'threat-hunt': 'globe',
+  soar:          'soar',
+  purple:        'agentic-soc',
+  architect:     'architect',
+  'alert-gen':   'alert-gen',
+  'prompt-eng':  'prompt-eng',
 }
 
 function RoleMenu({ role, onRoleChange }: { role: Role; onRoleChange: (r: Role) => void }) {

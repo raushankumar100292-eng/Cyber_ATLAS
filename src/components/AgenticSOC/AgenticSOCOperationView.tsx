@@ -55,7 +55,7 @@ interface AgentSkills {
   iocPatterns:        string[];
   remediationSteps:   string[];
   commonTechniques:   string[];
-  sampleQueries:      { splunk: string[]; kql: string[] };
+  sampleQueries?:     { splunk: string[]; kql: string[] };
 }
 const AGENT_REGISTRY = new Map<string, AgentSkills>();
 
@@ -1129,7 +1129,7 @@ export default function AgenticSOCOperationView() {
                   const result = await groqTrainAndAnalyze(apiKey.trim(), a.alert);
                   const newSkills: AgentSkills = {
                     alertType: a.alert.useCase, label: a.childAgent.label, color: a.childAgent.color,
-                    trainedAt: Date.now(), reuseCount: 0, ...result.skills,
+                    trainedAt: Date.now(), reuseCount: 0, sampleQueries: { splunk: [], kql: [] }, ...result.skills,
                   };
                   AGENT_REGISTRY.set(a.alert.useCase, newSkills);
                   setRegVersion(v => v + 1);

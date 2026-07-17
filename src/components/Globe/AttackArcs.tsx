@@ -1,9 +1,19 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
-import { useStore } from '../../lib/store'
 import { severityColor } from '../../lib/theme'
-import type { ThreatEvent } from '../../lib/types'
+
+interface ThreatEvent {
+  id: string
+  srcCoord: [number, number]
+  dstCoord: [number, number]
+  severity: keyof typeof severityColor
+  ts: number
+  srcCity: string
+  dstCity: string
+  techniqueName: string
+  status: string
+}
 
 const EARTH_R = 1.0
 const SEGMENTS = 44
@@ -82,14 +92,5 @@ function ArcLine({ event }: { event: ThreatEvent }) {
 }
 
 export default function AttackArcs() {
-  const allEvents = useStore(s => s.events)
-  const events = allEvents.slice(0, 14)
-
-  return (
-    <>
-      {events.map(e => (
-        <ArcLine key={e.id} event={e} />
-      ))}
-    </>
-  )
+  return null
 }
