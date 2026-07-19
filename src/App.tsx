@@ -202,13 +202,10 @@ export default function App() {
               </motion.div>
             )}
 
-            {isAgenticSOCView && (
-              <motion.div key="agentic-soc" style={{ width: '100%', height: '100%' }}
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}>
-                <AgenticSOCOperationView />
-              </motion.div>
-            )}
+            {/* Always mounted so the alert-queue subscription stays live across tab switches */}
+            <div key="agentic-soc" style={{ display: isAgenticSOCView ? 'flex' : 'none', width: '100%', height: '100%' }}>
+              <AgenticSOCOperationView />
+            </div>
 
             {isAlertGenView && (
               <motion.div key="alert-gen" style={{ width: '100%', height: '100%' }}
