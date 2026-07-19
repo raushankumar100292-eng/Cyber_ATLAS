@@ -191,7 +191,8 @@ export default function AlertGeneratorView() {
   const setAutoGenRotate   = useStore(s => s.setAutoGenRotate)
 
   const apiKey = useStore(s => s.apiKey)
-  const [selectedUC,  setSelectedUC]  = useState<UseCaseId>('phishing')
+  // Sync selectedUC with store's active use case so the view looks correct on remount
+  const [selectedUC,  setSelectedUC]  = useState<UseCaseId>(() => (autoGenMode ? autoGenUseCase as UseCaseId : 'phishing'))
   const [alerts,      setAlerts]      = useState<AlertEntry[]>([])
   const [generating,  setGenerating]  = useState(false)
   const [countdown,   setCountdown]   = useState(0)
@@ -236,43 +237,41 @@ export default function AlertGeneratorView() {
     }
   }, [apiKey, selectedUC, pushAlert])
 
-  // Mirror background-generated alerts into local alert list for display
+  // Mirror ALL queue alerts into local list — no use-case filter so nothing is hidden
+  // when navigating back to this tab after background generation ran on other use cases.
   const alertQueue        = useStore(s => s.alertQueue)
   const seenIdsRef        = useRef(new Set<string>())
   useEffect(() => {
     alertQueue.forEach(a => {
       if (seenIdsRef.current.has(a.id)) return
-      // In rotate mode accept every use case; otherwise filter to the selected one
-      if (autoGenRotate || a.useCase === autoGenUseCase) {
-        seenIdsRef.current.add(a.id)
-        const syntheticEntry: AlertEntry = {
-          id:        a.id,
-          useCase:   a.useCase,
-          createdAt: a.createdAt,
-          raw:       '',
-          alert: {
-            alert_id:           a.alertId,
-            timestamp:          a.timestamp,
-            severity:           a.severity,
-            title:              a.title,
-            description:        a.description,
-            tactic:             a.tactic,
-            technique_id:       a.techniqueId,
-            technique_name:     a.techniqueName,
-            source: { ip: a.sourceIp, hostname: a.sourceHost, user: a.sourceUser, process: a.sourceProcess ?? undefined },
-            destination: { ip: a.destIp, hostname: a.destHost, port: a.destPort },
-            evidence:           a.evidence,
-            raw_log:            a.rawLog,
-            recommended_action: a.recommendedAction,
-          },
-        }
-        setAlerts(prev => {
-          if (prev.some(e => e.id === a.id)) return prev
-          return [syntheticEntry, ...prev].slice(0, 200)
-        })
+      seenIdsRef.current.add(a.id)
+      const syntheticEntry: AlertEntry = {
+        id:        a.id,
+        useCase:   a.useCase,
+        createdAt: a.createdAt,
+        raw:       '',
+        alert: {
+          alert_id:           a.alertId,
+          timestamp:          a.timestamp,
+          severity:           a.severity,
+          title:              a.title,
+          description:        a.description,
+          tactic:             a.tactic,
+          technique_id:       a.techniqueId,
+          technique_name:     a.techniqueName,
+          source: { ip: a.sourceIp, hostname: a.sourceHost, user: a.sourceUser, process: a.sourceProcess ?? undefined },
+          destination: { ip: a.destIp, hostname: a.destHost, port: a.destPort },
+          evidence:           a.evidence,
+          raw_log:            a.rawLog,
+          recommended_action: a.recommendedAction,
+        },
       }
+      setAlerts(prev => {
+        if (prev.some(e => e.id === a.id)) return prev
+        return [syntheticEntry, ...prev].slice(0, 200)
+      })
     })
-  }, [alertQueue, autoGenUseCase, autoGenRotate])
+  }, [alertQueue])
 
   const handleToggleAuto = () => {
     if (!autoGenMode) {
