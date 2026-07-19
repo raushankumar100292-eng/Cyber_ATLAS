@@ -160,6 +160,17 @@ export default function App() {
 
         {/* ── Main content ── */}
         <main className="flex-1 relative overflow-hidden">
+
+          {/* Always-mounted outside AnimatePresence so the queue subscription never drops */}
+          <div style={{
+            position: 'absolute', inset: 0,
+            visibility: isAgenticSOCView ? 'visible' : 'hidden',
+            pointerEvents: isAgenticSOCView ? 'auto' : 'none',
+            zIndex: isAgenticSOCView ? 1 : 0,
+          }}>
+            <AgenticSOCOperationView />
+          </div>
+
           <AnimatePresence mode="wait">
 
             {isUploadView && (
@@ -201,11 +212,6 @@ export default function App() {
                 <ArchitectView />
               </motion.div>
             )}
-
-            {/* Always mounted so the alert-queue subscription stays live across tab switches */}
-            <div key="agentic-soc" style={{ display: isAgenticSOCView ? 'flex' : 'none', width: '100%', height: '100%' }}>
-              <AgenticSOCOperationView />
-            </div>
 
             {isAlertGenView && (
               <motion.div key="alert-gen" style={{ width: '100%', height: '100%' }}
