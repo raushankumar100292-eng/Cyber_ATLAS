@@ -11,6 +11,10 @@ export default function AlertGeneratorBackground() {
   const pushAlert             = useStore(s => s.pushAlert)
   const setAutoGenLastFiredAt = useStore(s => s.setAutoGenLastFiredAt)
 
+  // Auto-clear threshold: once the queue holds this many processed alerts,
+  // prune them so long auto runs don't balloon the queue.
+  const QUEUE_PRUNE_THRESHOLD = 60
+
   // Prevent overlapping in-flight Groq calls
   const inFlight = useRef(false)
 
@@ -37,6 +41,12 @@ export default function AlertGeneratorBackground() {
         const qi   = buildAlertQueueItem(data, uc)
         pushAlert(qi)
         setAutoGenLastFiredAt(Date.now())
+
+        // Auto-clear processed alerts when the queue gets full
+        const queue = useStore.getState().alertQueue
+        if (queue.length >= QUEUE_PRUNE_THRESHOLD) {
+          useStore.getState().pruneProcessedAlerts()
+        }
       } catch {
         // silent — errors visible in Alert Generator tab if user is watching
       } finally {

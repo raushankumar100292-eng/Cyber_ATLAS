@@ -120,6 +120,7 @@ interface AppState {
   updateAlertStatus: (id: string, status: AlertQueueItem['status']) => void
   dismissAlert: (id: string) => void
   clearAlertQueue: () => void
+  pruneProcessedAlerts: () => void
 
   // resolved incident history (feeds Analytics, IOC Watchlist)
   resolvedIncidents: ResolvedIncident[]
@@ -198,6 +199,10 @@ export const useStore = create<AppState>((set, get) => ({
   })),
   dismissAlert: (id) => set(s => ({ alertQueue: s.alertQueue.filter(a => a.id !== id) })),
   clearAlertQueue: () => set({ alertQueue: [] }),
+  // Drop already-processed alerts (anything not still 'new') to keep the queue
+  // from filling up during long auto-generation runs. Pending 'new' alerts are
+  // always preserved so nothing un-ingested is lost.
+  pruneProcessedAlerts: () => set(s => ({ alertQueue: s.alertQueue.filter(a => a.status === 'new') })),
 
   resolvedIncidents: [],
   pushResolvedIncident: (inc) => set(s => ({ resolvedIncidents: [inc, ...s.resolvedIncidents].slice(0, 1000) })),
