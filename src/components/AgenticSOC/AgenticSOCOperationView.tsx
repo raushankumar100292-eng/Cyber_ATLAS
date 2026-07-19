@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useStore } from "../../lib/store";
 import type { AlertQueueItem, ResolvedIncident } from "../../lib/store";
+import { groqGenerateAlert, parseAlert, buildAlertQueueItem, USE_CASES } from "./alertGenUtils";
+import type { UseCaseId } from "./alertGenUtils";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
@@ -883,15 +885,137 @@ function IngestionDropdown({ active, onSelect }: { active: SourceId | null; onSe
   );
 }
 
+// ── SIEM polling state (module-level so it persists across ingestion panel renders) ─
+type SiemTab = "splunk" | "sentinel" | "elastic";
+const SIEM_DEFAULTS: Record<SiemTab, { placeholder: string; docUrl: string; sampleEndpoint: string }> = {
+  splunk:   { placeholder: "https://splunk.acme.com:8089", docUrl: "Splunk REST API → search/jobs", sampleEndpoint: "/services/search/jobs/export?search=index%3D*+earliest%3D-5m&output_mode=json" },
+  sentinel: { placeholder: "https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.OperationalInsights/workspaces/{ws}", docUrl: "Azure Monitor Logs API", sampleEndpoint: "/providers/Microsoft.Insights/logs?api-version=2021-11-01-preview" },
+  elastic:  { placeholder: "https://elastic.acme.com:9200", docUrl: "Elasticsearch Alerts API", sampleEndpoint: "/_query/async?wait_for_completion_timeout=5s" },
+};
+
 // ── Ingestion panel (slide-in) ────────────────────────────────────────────────
 function IngestionPanel({ source, onIngest }: { source: SourceId | null; onIngest: (a: AlertQueueItem, src: ProcessingAgent["source"]) => void }) {
   const alertQueue = useStore(s => s.alertQueue);
-  const [json, setJson] = useState("");
-  const [err,  setErr]  = useState("");
+  const apiKey     = useStore(s => s.apiKey);
+  const pushAlert  = useStore(s => s.pushAlert);
+
+  const [json,          setJson]          = useState("");
+  const [err,           setErr]           = useState("");
+  const [genUC,         setGenUC]         = useState<UseCaseId>("phishing");
+  const [generating,    setGenerating]    = useState(false);
+  const [genErr,        setGenErr]        = useState("");
+
+  // SIEM connect state
+  const [siemTab,       setSiemTab]       = useState<SiemTab>("splunk");
+  const [siemUrl,       setSiemUrl]       = useState("");
+  const [siemToken,     setSiemToken]     = useState("");
+  const [siemPolling,   setSiemPolling]   = useState(false);
+  const [siemStatus,    setSiemStatus]    = useState<"idle" | "connected" | "error">("idle");
+  const [siemMsg,       setSiemMsg]       = useState("");
+  const [siemPollCount, setSiemPollCount] = useState(0);
+  const siemTimerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const siemMountedRef  = useRef(true);
+
+  useEffect(() => { siemMountedRef.current = true; return () => { siemMountedRef.current = false; if (siemTimerRef.current) clearInterval(siemTimerRef.current); }; }, []);
+
   const fileRef = useRef<HTMLInputElement>(null);
   const pending = alertQueue.filter(a => a.status === "new").length;
-  const opt = SOURCE_OPTIONS.find(s => s.id === source);
-  const PANEL_H = source === "paste" ? 190 : source === "siem" ? 172 : 110;
+  const opt     = SOURCE_OPTIONS.find(s => s.id === source);
+  const PANEL_H = source === "paste" ? 190 : source === "siem" ? 280 : source === "gen" ? 130 : 110;
+
+  // ── Direct generation from within SOC ────────────────────────────────────
+  const handleGenerate = async () => {
+    if (!apiKey.trim()) { setGenErr("Set Groq API key first (gear icon in header)."); return; }
+    setGenerating(true); setGenErr("");
+    try {
+      const uc  = USE_CASES.find(u => u.id === genUC)!;
+      const raw = await groqGenerateAlert(apiKey.trim(), uc);
+      const data = parseAlert(raw);
+      const qi   = buildAlertQueueItem(data, uc);
+      pushAlert(qi);           // → lands in store queue
+      onIngest(qi, "alert-gen"); // → directly into SOC pipeline (bypasses queue delay)
+    } catch (e) { setGenErr(e instanceof Error ? e.message : String(e)); }
+    finally { setGenerating(false); }
+  };
+
+  // ── SIEM polling logic ────────────────────────────────────────────────────
+  const siemPoll = useCallback(async () => {
+    if (!siemMountedRef.current) return;
+    const url = siemUrl.trim();
+
+    try {
+      if (url && !url.startsWith("http://demo") && !url.startsWith("https://demo")) {
+        // Real endpoint — attempt fetch with bearer token
+        const endpoint = url + SIEM_DEFAULTS[siemTab].sampleEndpoint;
+        const res = await fetch(endpoint, {
+          headers: { Authorization: `Bearer ${siemToken}`, "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.json();
+        // Normalise whatever shape we get
+        const rows: unknown[] = Array.isArray(body) ? body : (body?.hits?.hits ?? body?.results ?? body?.value ?? []);
+        let ingested = 0;
+        rows.slice(0, 5).forEach(row => {
+          const a = normalise(row, "webhook");
+          if (a) { onIngest(a, "webhook"); ingested++; }
+        });
+        if (!siemMountedRef.current) return;
+        setSiemPollCount(c => c + 1);
+        setSiemStatus("connected");
+        setSiemMsg(`Poll #${siemPollCount + 1} — ${ingested} alert${ingested !== 1 ? "s" : ""} ingested`);
+      } else {
+        // Demo / no URL: simulate a realistic alert via Groq (if key present) or heuristic
+        if (apiKey.trim()) {
+          const uc  = USE_CASES[Math.floor(Math.random() * USE_CASES.length)];
+          const raw = await groqGenerateAlert(apiKey.trim(), uc);
+          const data = parseAlert(raw);
+          const qi   = buildAlertQueueItem(data, uc);
+          if (!siemMountedRef.current) return;
+          onIngest(qi, "webhook");
+          setSiemPollCount(c => c + 1);
+          setSiemStatus("connected");
+          setSiemMsg(`Poll #${siemPollCount + 1} — simulated ${uc.label} alert ingested`);
+        } else {
+          // No API key: inject a minimal synthetic alert
+          const synth: AlertQueueItem = {
+            id: `siem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            useCase: "malware", useCaseLabel: "Endpoint Malware", severity: "HIGH",
+            title: "SIEM Demo Alert — Suspicious Process Execution",
+            description: "Simulated SIEM poll alert. Add a Groq key for AI-generated content.",
+            tactic: "Execution", techniqueId: "T1059", techniqueName: "Command and Scripting Interpreter",
+            sourceIp: "10.0.1.42", sourceHost: "demo-host-01", sourceUser: "svc_account",
+            sourceProcess: "powershell.exe", destIp: "198.51.100.7", destHost: "suspicious-c2.example", destPort: 443,
+            evidence: ["PowerShell encoded command detected", "Outbound HTTPS to unknown host"], rawLog: '{"event":"process_create","proc":"powershell.exe","cmdline":"-enc AAEC..."}',
+            recommendedAction: "Isolate host and review process tree", alertId: `DEMO-${Date.now()}`,
+            timestamp: new Date().toISOString(), createdAt: Date.now(), status: "new",
+          };
+          if (!siemMountedRef.current) return;
+          onIngest(synth, "webhook");
+          setSiemPollCount(c => c + 1);
+          setSiemStatus("connected");
+          setSiemMsg(`Poll #${siemPollCount + 1} — demo alert injected (add Groq key for AI content)`);
+        }
+      }
+    } catch (e) {
+      if (!siemMountedRef.current) return;
+      setSiemStatus("error");
+      setSiemMsg(e instanceof Error ? e.message : String(e));
+    }
+  }, [siemUrl, siemToken, siemTab, apiKey, onIngest, siemPollCount]);
+
+  const startSiemPoll = () => {
+    setSiemPolling(true); setSiemStatus("connected"); setSiemMsg("Polling started…");
+    siemPoll();
+    siemTimerRef.current = setInterval(siemPoll, 30_000);
+  };
+  const stopSiemPoll = () => {
+    setSiemPolling(false); setSiemStatus("idle"); setSiemMsg("");
+    if (siemTimerRef.current) { clearInterval(siemTimerRef.current); siemTimerRef.current = null; }
+  };
+
+  // Stop polling when panel is dismissed
+  useEffect(() => { if (source !== "siem" && siemPolling) stopSiemPoll(); }, [source]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePaste = () => {
     try {
@@ -919,6 +1043,8 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
     e.target.value = "";
   };
 
+  const siemDef = SIEM_DEFAULTS[siemTab];
+
   return (
     <div style={{ overflow: "hidden", maxHeight: source ? PANEL_H : 0, transition: "max-height 0.26s cubic-bezier(0.4,0,0.2,1)", borderBottom: source ? `1px solid ${C.line}` : "none", background: C.bg2 }}>
       {source && (
@@ -931,20 +1057,38 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
           </div>
           <div style={{ width: 1, background: C.line, alignSelf: "stretch", flexShrink: 0 }} />
 
+          {/* ── Alert Generator feed ── */}
           {source === "gen" && (
-            <div style={{ flex: 1, display: "flex", gap: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderRadius: 8, background: C.panel, border: `1px solid ${pending > 0 ? C.live + "50" : C.line}`, minWidth: 190 }}>
+            <div style={{ flex: 1, display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {/* Queue status */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderRadius: 8, background: C.panel, border: `1px solid ${pending > 0 ? C.live + "50" : C.line}`, minWidth: 180 }}>
                 <span style={{ width: 8, height: 8, borderRadius: "50%", background: pending > 0 ? C.live : C.mut2, animation: pending > 0 ? "soc-pulse 1.5s ease-in-out infinite" : "none", flexShrink: 0 }} />
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 600, color: C.text }}>Alert Generator feed</div>
                   <div className="soc-mono" style={{ fontSize: 9.5, color: pending > 0 ? C.live : C.mut2 }}>{pending > 0 ? `${pending} alert${pending !== 1 ? "s" : ""} pending` : "queue empty"}</div>
                 </div>
               </div>
-              <div style={{ flex: 1, padding: "7px 11px", borderRadius: 8, background: `${C.live}07`, border: `1px solid ${C.live}18`, fontSize: 10, color: C.mut, lineHeight: 1.55 }}>
-                Alerts from the <span style={{ color: C.amber }}>Alert Generator</span> tab are picked up automatically. Master Agent assigns a specialized child agent per alert type — same type reuses cached skills with zero AI tokens.
+              {/* Direct generate */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: C.panel, border: `1px solid ${C.line}` }}>
+                <select value={genUC} onChange={e => setGenUC(e.target.value as UseCaseId)}
+                  style={{ height: 28, background: C.panelHi, border: `1px solid ${C.lineHi}`, borderRadius: 6, padding: "0 8px", color: C.text, fontSize: 10, fontFamily: "inherit", outline: "none" }}>
+                  {USE_CASES.map(u => <option key={u.id} value={u.id} style={{ background: C.bg }}>{u.label}</option>)}
+                </select>
+                <button className="soc-btn" onClick={handleGenerate} disabled={generating}
+                  style={{ height: 28, padding: "0 14px", borderRadius: 6, border: "none", background: generating ? C.line : C.amber, color: generating ? C.mut2 : C.bg, fontSize: 10, fontWeight: 700, fontFamily: "inherit", cursor: generating ? "default" : "pointer", whiteSpace: "nowrap" }}>
+                  {generating ? "Generating…" : "⚡ Generate Now"}
+                </button>
               </div>
+              {genErr && <div style={{ alignSelf: "center", fontSize: 9.5, color: C.crit }}>{genErr}</div>}
+              {!genErr && (
+                <div style={{ flex: 1, padding: "7px 11px", borderRadius: 8, background: `${C.live}07`, border: `1px solid ${C.live}18`, fontSize: 10, color: C.mut, lineHeight: 1.55, minWidth: 180 }}>
+                  Background alerts auto-ingest. Use <b style={{ color: C.amber }}>⚡ Generate Now</b> to fire one immediately into the pipeline.
+                </div>
+              )}
             </div>
           )}
+
+          {/* ── Paste JSON ── */}
           {source === "paste" && (
             <div style={{ flex: 1, display: "flex", gap: 10 }}>
               <div style={{ flex: 1 }}>
@@ -959,6 +1103,8 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
               </button>
             </div>
           )}
+
+          {/* ── File Upload ── */}
           {source === "upload" && (
             <div style={{ flex: 1, display: "flex", gap: 14 }}>
               <div className="soc-btn" onClick={() => fileRef.current?.click()}
@@ -975,18 +1121,54 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
               </div>
             </div>
           )}
+
+          {/* ── SIEM Connect ── */}
           {source === "siem" && (
-            <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              {[
-                { name: "Splunk SOAR",        lines: ["POST /api/atlas/ingest", "Alert Actions → Webhook", "Map payload to schema"] },
-                { name: "Microsoft Sentinel", lines: ["Logic App → HTTP action", "Trigger: New incident",   "Body: map to schema"] },
-                { name: "Elastic / Kibana",   lines: ["Alerting → Webhook",     "Action: Webhook connector","Map rule context to JSON"] },
-              ].map(s => (
-                <div key={s.name} style={{ padding: "9px 11px", borderRadius: 8, background: C.panel, border: `1px solid ${C.line}` }}>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, color: C.text, marginBottom: 6 }}>{s.name}</div>
-                  {s.lines.map((l, i) => <div key={i} className="soc-mono" style={{ fontSize: 9, color: i === 0 ? C.live : C.mut2, marginBottom: 2 }}>{l}</div>)}
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
+              {/* SIEM tabs */}
+              <div style={{ display: "flex", gap: 4 }}>
+                {(["splunk", "sentinel", "elastic"] as SiemTab[]).map(t => (
+                  <button key={t} className="soc-btn" onClick={() => { setSiemTab(t); if (siemPolling) stopSiemPoll(); }}
+                    style={{ padding: "3px 12px", borderRadius: 6, border: `1px solid ${siemTab === t ? C.live + "60" : C.line}`, background: siemTab === t ? `${C.live}12` : "transparent", color: siemTab === t ? C.live : C.mut2, fontSize: 10, fontFamily: "inherit", fontWeight: siemTab === t ? 700 : 400, cursor: "pointer", textTransform: "capitalize" }}>
+                    {t === "sentinel" ? "MS Sentinel" : t === "elastic" ? "Elastic/SIEM" : "Splunk"}
+                  </button>
+                ))}
+                {/* Status badge */}
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: siemStatus === "connected" ? C.ok : siemStatus === "error" ? C.crit : C.mut2, animation: siemPolling ? "soc-pulse 1.5s ease-in-out infinite" : "none" }} />
+                  <span className="soc-mono" style={{ fontSize: 9, color: siemStatus === "connected" ? C.ok : siemStatus === "error" ? C.crit : C.mut2 }}>
+                    {siemPolling ? `polling · ${siemPollCount} pulled` : siemStatus === "error" ? "error" : "disconnected"}
+                  </span>
+                  {siemMsg && <span className="soc-mono" style={{ fontSize: 8.5, color: C.mut2 }}>— {siemMsg}</span>}
                 </div>
-              ))}
+              </div>
+
+              {/* Connection row */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input value={siemUrl} onChange={e => setSiemUrl(e.target.value)} placeholder={siemDef.placeholder}
+                  style={{ flex: 2, minWidth: 200, height: 28, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, padding: "0 8px", color: C.text, fontSize: 9.5, fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
+                <input value={siemToken} onChange={e => setSiemToken(e.target.value)} placeholder="API token / Bearer key" type="password"
+                  style={{ flex: 1, minWidth: 140, height: 28, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, padding: "0 8px", color: C.text, fontSize: 9.5, fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
+                {!siemPolling ? (
+                  <button className="soc-btn" onClick={startSiemPoll}
+                    style={{ height: 28, padding: "0 14px", borderRadius: 6, border: "none", background: C.live, color: C.bg, fontSize: 10, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
+                    ⊕ Connect &amp; Poll
+                  </button>
+                ) : (
+                  <button className="soc-btn" onClick={stopSiemPoll}
+                    style={{ height: 28, padding: "0 14px", borderRadius: 6, border: `1px solid ${C.crit}50`, background: `${C.crit}10`, color: C.crit, fontSize: 10, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
+                    ■ Stop
+                  </button>
+                )}
+              </div>
+
+              {/* API reference */}
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <div style={{ flex: 1, padding: "5px 9px", borderRadius: 6, background: C.panel, border: `1px solid ${C.line}` }}>
+                  <div className="soc-mono" style={{ fontSize: 8.5, color: C.mut2, marginBottom: 2 }}>Polls {siemDef.docUrl} every 30s · auto-normalises to ATLAS schema · leave URL blank for demo mode</div>
+                  <div className="soc-mono" style={{ fontSize: 8, color: C.live, wordBreak: "break-all" }}>{siemDef.sampleEndpoint}</div>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -1033,8 +1215,10 @@ export default function AgenticSOCOperationView() {
   const [activeSource, setActiveSource] = useState<SourceId | null>("gen");
   const [regVersion,   setRegVersion]   = useState(0); // bump to re-render registry
 
-  const processedIds = useRef(new Set<string>());
-  const logRef       = useRef<HTMLDivElement>(null);
+  const processedIds  = useRef(new Set<string>());
+  const logRef        = useRef<HTMLDivElement>(null);
+  const processingRef = useRef<ProcessingAgent[]>([]);
+  const mountedRef    = useRef(true);
 
   useEffect(() => {
     const m = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -1046,6 +1230,25 @@ export default function AgenticSOCOperationView() {
 
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = 0; }, [log.length]);
 
+  // Keep ref in sync so cleanup can access current processing list without stale closure
+  useEffect(() => { processingRef.current = processing; }, [processing]);
+
+  // On unmount: reset any still-in-progress alerts back to 'new' so they can be
+  // re-ingested when the user navigates back to this view. Without this, alerts stay
+  // 'acknowledged' in the store but the local processing state is gone — the SOC
+  // would show "idle" even though alerts were previously picked up.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      processingRef.current.forEach(agent => {
+        if (!agent.done) {
+          useStore.getState().updateAlertStatus(agent.alert.id, 'new');
+        }
+      });
+    };
+  }, []);
+
   const ingest = useCallback((alert: AlertQueueItem, source: ProcessingAgent["source"]) => {
     const procId      = `SOC-${++PROC_ID}`;
     const agentConf   = AGENT_CONFIG[alert.useCase] ?? AGENT_CONFIG.unknown;
@@ -1056,7 +1259,7 @@ export default function AgenticSOCOperationView() {
       spawnAt: Date.now(), done: false, mttr: null, analyzing: false,
       analyzeProgress: 0, analyzeSubstage: "", showInsights: false, insightTab: "analysis",
     };
-    setProcessing(prev => [agent, ...prev].slice(0, 14));
+    setProcessing(prev => [agent, ...prev].slice(0, 30));
     pushLog(procId, alert.severity, `master agent → ${agentConf.label} [${hasSkills ? "skills cached" : "first run"}]`);
   }, [pushLog]);
 
@@ -1127,6 +1330,7 @@ export default function AgenticSOCOperationView() {
               setTimeout(async () => {
                 try {
                   const result = await groqTrainAndAnalyze(apiKey.trim(), a.alert);
+                  if (!mountedRef.current) return; // navigated away during analysis
                   const newSkills: AgentSkills = {
                     alertType: a.alert.useCase, label: a.childAgent.label, color: a.childAgent.color,
                     trainedAt: Date.now(), reuseCount: 0, sampleQueries: { splunk: [], kql: [] }, ...result.skills,

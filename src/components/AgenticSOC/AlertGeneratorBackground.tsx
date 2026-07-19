@@ -4,10 +4,11 @@ import { USE_CASES, groqGenerateAlert, parseAlert, buildAlertQueueItem, GROQ_KEY
 
 // Headless component — always mounted in App, keeps auto-gen running across tab switches.
 export default function AlertGeneratorBackground() {
-  const autoGenMode        = useStore(s => s.autoGenMode)
-  const autoGenInterval    = useStore(s => s.autoGenInterval)
-  const autoGenUseCase     = useStore(s => s.autoGenUseCase)
-  const pushAlert          = useStore(s => s.pushAlert)
+  const autoGenMode           = useStore(s => s.autoGenMode)
+  const autoGenInterval       = useStore(s => s.autoGenInterval)
+  const autoGenUseCase        = useStore(s => s.autoGenUseCase)
+  const autoGenRotate         = useStore(s => s.autoGenRotate)
+  const pushAlert             = useStore(s => s.pushAlert)
   const setAutoGenLastFiredAt = useStore(s => s.setAutoGenLastFiredAt)
 
   // Prevent overlapping in-flight Groq calls
@@ -23,7 +24,11 @@ export default function AlertGeneratorBackground() {
       const apiKey = localStorage.getItem(GROQ_KEY_STORAGE)?.trim()
       if (!apiKey) return
 
-      const uc = USE_CASES.find(u => u.id === autoGenUseCase) ?? USE_CASES[0]
+      // When rotate is on, pick a random use case each tick
+      const uc = autoGenRotate
+        ? USE_CASES[Math.floor(Math.random() * USE_CASES.length)]
+        : (USE_CASES.find(u => u.id === autoGenUseCase) ?? USE_CASES[0])
+
       inFlight.current = true
       try {
         const raw  = await groqGenerateAlert(apiKey, uc)
@@ -47,7 +52,7 @@ export default function AlertGeneratorBackground() {
       mounted = false
       clearInterval(timer)
     }
-  }, [autoGenMode, autoGenInterval, autoGenUseCase, pushAlert, setAutoGenLastFiredAt])
+  }, [autoGenMode, autoGenInterval, autoGenUseCase, autoGenRotate, pushAlert, setAutoGenLastFiredAt])
 
   return null
 }

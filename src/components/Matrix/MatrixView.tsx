@@ -328,7 +328,9 @@ function TacticColumn({
         onClick={() => selectTactic(isSelected ? null : tactic.id)}
         className="rounded-lg p-3 text-left transition-all duration-150 mb-1.5 sticky top-0 z-10"
         style={{
-          background: isSelected ? `${color}22` : `${color}10`,
+          background: isSelected
+            ? `linear-gradient(${color}22, ${color}22), #ffffff`
+            : `linear-gradient(${color}10, ${color}10), #ffffff`,
           border: `1.5px solid ${isSelected ? color + '55' : color + '22'}`,
           boxShadow: isSelected ? `0 0 20px ${color}18, 0 2px 8px rgba(0,0,0,0.06)` : '0 1px 3px rgba(0,0,0,0.04)',
         }}

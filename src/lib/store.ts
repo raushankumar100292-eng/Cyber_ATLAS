@@ -114,10 +114,12 @@ interface AppState {
   autoGenMode: boolean
   autoGenInterval: number     // seconds
   autoGenUseCase: string
+  autoGenRotate: boolean      // cycle through all use cases randomly on each tick
   autoGenLastFiredAt: number  // Date.now() of last successful generation
   setAutoGenMode: (v: boolean) => void
   setAutoGenInterval: (v: number) => void
   setAutoGenUseCase: (v: string) => void
+  setAutoGenRotate: (v: boolean) => void
   setAutoGenLastFiredAt: (v: number) => void
 
   // upload workflow actions
@@ -172,10 +174,12 @@ export const useStore = create<AppState>((set, get) => ({
   autoGenMode: false,
   autoGenInterval: 60,
   autoGenUseCase: 'phishing',
+  autoGenRotate: false,
   autoGenLastFiredAt: 0,
   setAutoGenMode: (v) => set({ autoGenMode: v }),
   setAutoGenInterval: (v) => set({ autoGenInterval: v }),
   setAutoGenUseCase: (v) => set({ autoGenUseCase: v }),
+  setAutoGenRotate: (v) => set({ autoGenRotate: v }),
   setAutoGenLastFiredAt: (v) => set({ autoGenLastFiredAt: v }),
 
   setClientInfo: (name, industryLabel) => set({ clientName: name, industryLabel }),

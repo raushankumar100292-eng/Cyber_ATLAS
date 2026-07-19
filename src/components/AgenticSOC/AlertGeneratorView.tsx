@@ -9,7 +9,7 @@ import {
 import {
   Zap, Play, Square, Trash2, Copy, Check, ChevronDown, ChevronRight,
   AlertTriangle, Shield, Mail, Server, Database, Key, Network, Cloud,
-  Users, Activity, RefreshCw, Clock, Eye,
+  Users, Activity, RefreshCw, Clock, Eye, Shuffle,
 } from 'lucide-react'
 
 // ── Icon map (kept local — utils has no React dep) ────────────────────────────
@@ -27,12 +27,12 @@ const UC_COLORS: Record<UseCaseId, string> = {
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface AlertEntry { id: string; useCase: string; alert: SiemAlert; raw: string; createdAt: number }
 
-const SEV_META: Record<string, { bg: string; border: string; text: string }> = {
-  CRITICAL: { bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.35)',   text: '#f87171' },
-  HIGH:     { bg: 'rgba(249,115,22,0.10)',   border: 'rgba(249,115,22,0.30)',  text: '#fb923c' },
-  MEDIUM:   { bg: 'rgba(234,179,8,0.10)',    border: 'rgba(234,179,8,0.28)',   text: '#fbbf24' },
-  LOW:      { bg: 'rgba(52,211,153,0.09)',   border: 'rgba(52,211,153,0.25)',  text: '#34d399' },
-  INFO:     { bg: 'rgba(100,116,139,0.09)',  border: 'rgba(100,116,139,0.25)', text: '#94a3b8' },
+const SEV_META: Record<string, { bg: string; border: string; text: string; glow: string }> = {
+  CRITICAL: { bg: 'rgba(239,68,68,0.22)',   border: 'rgba(239,68,68,0.70)',   text: '#ff4444', glow: 'rgba(239,68,68,0.35)' },
+  HIGH:     { bg: 'rgba(249,115,22,0.18)',   border: 'rgba(249,115,22,0.60)',  text: '#ff7520', glow: 'rgba(249,115,22,0.28)' },
+  MEDIUM:   { bg: 'rgba(234,179,8,0.14)',    border: 'rgba(234,179,8,0.48)',   text: '#f5c400', glow: 'rgba(234,179,8,0.18)' },
+  LOW:      { bg: 'rgba(52,211,153,0.12)',   border: 'rgba(52,211,153,0.42)',  text: '#10d98a', glow: 'rgba(52,211,153,0.15)' },
+  INFO:     { bg: 'rgba(100,116,139,0.10)',  border: 'rgba(100,116,139,0.35)', text: '#94a3b8', glow: 'rgba(100,116,139,0.10)' },
 }
 const INTERVALS = [
   { label: '15 s',  value: 15  },
@@ -45,9 +45,16 @@ const INTERVALS = [
 // ── Sub-components ────────────────────────────────────────────────────────────
 function SevBadge({ sev }: { sev: string }) {
   const m = SEV_META[sev] ?? SEV_META.INFO
+  const prominent = sev === 'CRITICAL' || sev === 'HIGH'
   return (
-    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold font-mono"
-      style={{ background: m.bg, border: `1px solid ${m.border}`, color: m.text }}>
+    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold font-mono uppercase tracking-wider"
+      style={{
+        background: m.bg,
+        border: `1px solid ${m.border}`,
+        color: m.text,
+        boxShadow: prominent ? `0 0 8px ${m.glow}, 0 0 2px ${m.border}` : undefined,
+        textShadow: sev === 'CRITICAL' ? `0 0 10px ${m.text}99` : undefined,
+      }}>
       {sev}
     </span>
   )
@@ -56,8 +63,10 @@ function SevBadge({ sev }: { sev: string }) {
 function AlertCard({ entry, onCopy }: { entry: AlertEntry; onCopy: (e: AlertEntry) => void }) {
   const [open,   setOpen]   = useState(false)
   const [copied, setCopied] = useState(false)
-  const a       = entry.alert
-  const ucColor = UC_COLORS[entry.useCase as UseCaseId] ?? '#94a3b8'
+  const a        = entry.alert
+  const ucColor  = UC_COLORS[entry.useCase as UseCaseId] ?? '#94a3b8'
+  const sevMeta  = SEV_META[a.severity] ?? SEV_META.INFO
+  const prominent = a.severity === 'CRITICAL' || a.severity === 'HIGH'
 
   const handleCopy = (ev: React.MouseEvent) => {
     ev.stopPropagation()
@@ -70,12 +79,19 @@ function AlertCard({ entry, onCopy }: { entry: AlertEntry; onCopy: (e: AlertEntr
     <motion.div layout initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.22 }}
       className="rounded-xl border overflow-hidden mb-2"
-      style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.12)' }}>
+      style={{
+        background: sevMeta.bg,
+        borderColor: sevMeta.border,
+        boxShadow: prominent
+          ? `0 0 18px ${sevMeta.glow}, 0 2px 8px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.07)`
+          : 'inset 0 1px 0 rgba(255,255,255,0.04)',
+      }}>
 
       {/* Header row */}
-      <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-white/[0.02] transition-colors select-none"
+      <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-white/[0.03] transition-colors select-none"
         onClick={() => setOpen(o => !o)}>
-        <div className="w-0.5 h-8 rounded-full shrink-0" style={{ background: SEV_META[a.severity]?.text ?? '#64748b' }} />
+        <div className="w-1 h-9 rounded-full shrink-0"
+          style={{ background: sevMeta.text, boxShadow: prominent ? `0 0 6px ${sevMeta.text}` : undefined }} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-0.5">
             <SevBadge sev={a.severity} />
@@ -171,6 +187,9 @@ export default function AlertGeneratorView() {
   const setAutoGenInterval     = useStore(s => s.setAutoGenInterval)
   const setAutoGenUseCase      = useStore(s => s.setAutoGenUseCase)
 
+  const autoGenRotate      = useStore(s => s.autoGenRotate)
+  const setAutoGenRotate   = useStore(s => s.setAutoGenRotate)
+
   const apiKey = useStore(s => s.apiKey)
   const [selectedUC,  setSelectedUC]  = useState<UseCaseId>('phishing')
   const [alerts,      setAlerts]      = useState<AlertEntry[]>([])
@@ -223,8 +242,8 @@ export default function AlertGeneratorView() {
   useEffect(() => {
     alertQueue.forEach(a => {
       if (seenIdsRef.current.has(a.id)) return
-      // Only surface alerts that came from the auto-gen background (not manual ones already added)
-      if (a.useCase === autoGenUseCase && !seenIdsRef.current.has(a.id)) {
+      // In rotate mode accept every use case; otherwise filter to the selected one
+      if (autoGenRotate || a.useCase === autoGenUseCase) {
         seenIdsRef.current.add(a.id)
         const syntheticEntry: AlertEntry = {
           id:        a.id,
@@ -253,7 +272,7 @@ export default function AlertGeneratorView() {
         })
       }
     })
-  }, [alertQueue, autoGenUseCase])
+  }, [alertQueue, autoGenUseCase, autoGenRotate])
 
   const handleToggleAuto = () => {
     if (!autoGenMode) {
@@ -331,8 +350,11 @@ export default function AlertGeneratorView() {
                   <div className="text-[11.5px] font-semibold leading-tight" style={{ color: active ? color : '#e2e8f0' }}>{u.label}</div>
                   <div className="text-[10px] text-slate-400 leading-tight mt-0.5">{u.tactic}</div>
                 </div>
-                {isAuto && (
+                {isAuto && !autoGenRotate && (
                   <span className="text-[8px] font-mono text-amber-400 border border-amber-400/30 rounded px-1 py-0.5 shrink-0 self-center animate-pulse">AUTO</span>
+                )}
+                {autoGenMode && autoGenRotate && (
+                  <span className="text-[8px] font-mono text-violet-400 border border-violet-400/30 rounded px-1 py-0.5 shrink-0 self-center animate-pulse">RND</span>
                 )}
               </button>
             )
@@ -394,6 +416,21 @@ export default function AlertGeneratorView() {
                 <option key={i.value} value={i.value} style={{ background: '#0f172a', color: '#cbd5e1' }}>{i.label}</option>
               ))}
             </select>
+
+            {/* Rotate toggle — randomly cycles through all use cases each tick */}
+            <button
+              onClick={() => setAutoGenRotate(!autoGenRotate)}
+              title="Rotate: randomly pick a different use case each tick"
+              className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11px] font-semibold transition-all"
+              style={{
+                background: autoGenRotate ? 'rgba(167,139,250,0.18)' : 'rgba(255,255,255,0.06)',
+                border: `1px solid ${autoGenRotate ? 'rgba(167,139,250,0.55)' : 'rgba(255,255,255,0.12)'}`,
+                color: autoGenRotate ? '#a78bfa' : '#64748b',
+                boxShadow: autoGenRotate ? '0 0 8px rgba(167,139,250,0.25)' : undefined,
+              }}>
+              <Shuffle className="w-3.5 h-3.5" />
+              Rotate
+            </button>
 
             {autoGenMode && (
               <div className="flex items-center gap-1.5 text-[11px] font-mono px-2 py-1 rounded-lg"
