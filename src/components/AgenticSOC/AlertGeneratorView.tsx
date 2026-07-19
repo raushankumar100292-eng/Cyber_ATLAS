@@ -281,6 +281,11 @@ export default function AlertGeneratorView() {
     setAutoGenMode(!autoGenMode)
   }
 
+  const handleStopAuto = () => {
+    setAutoGenMode(false)
+    setCountdown(0)
+  }
+
   const handleSelectUC = (id: UseCaseId) => {
     setSelectedUC(id)
     if (autoGenMode) setAutoGenUseCase(id) // update background runner in real-time
@@ -460,13 +465,19 @@ export default function AlertGeneratorView() {
               {generating ? 'Generating…' : 'Generate Alert'}
             </button>
 
-            {autoGenMode && (
-              <button onClick={() => setAutoGenMode(false)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all"
-                style={{ background: 'rgba(248,113,113,0.10)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171' }}>
-                <Square className="w-3 h-3" /> Stop
-              </button>
-            )}
+            {/* Stop — always visible; enabled only while auto mode is running */}
+            <button onClick={handleStopAuto} disabled={!autoGenMode}
+              title={autoGenMode ? 'Stop background auto-generation' : 'Auto-generation is not running'}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all"
+              style={{
+                background: autoGenMode ? 'rgba(248,113,113,0.14)' : 'rgba(100,116,139,0.06)',
+                border: `1px solid ${autoGenMode ? 'rgba(248,113,113,0.40)' : 'rgba(255,255,255,0.08)'}`,
+                color: autoGenMode ? '#f87171' : '#475569',
+                cursor: autoGenMode ? 'pointer' : 'not-allowed',
+                boxShadow: autoGenMode ? '0 0 10px rgba(248,113,113,0.20)' : undefined,
+              }}>
+              <Square className="w-3 h-3" /> Stop Auto
+            </button>
 
             {alerts.length > 0 && (
               <button onClick={handleClearAll}
