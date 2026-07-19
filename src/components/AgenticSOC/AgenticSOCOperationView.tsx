@@ -1279,25 +1279,34 @@ export default function AgenticSOCOperationView() {
     pushLog(procId, alert.severity, `master agent → ${agentConf.label} [${hasSkills ? "skills cached" : "first run"}]`);
   }, [pushLog]);
 
-  // Watch Zustand queue for new alerts — use direct store subscription so it fires
-  // synchronously on every pushAlert call, bypassing React's effect scheduling.
-  // processedIds is cleared on cleanup so React StrictMode's double-invoke works.
-  useEffect(() => {
-    const pick = () => {
-      useStore.getState().alertQueue.forEach(a => {
-        if (a.status === "new" && !processedIds.current.has(a.id)) {
-          processedIds.current.add(a.id);
-          useStore.getState().updateAlertStatus(a.id, "acknowledged");
-          ingest(a, "alert-gen");
-        }
-      });
-    };
-    pick(); // catch any alerts already in queue on mount
-    const unsub = useStore.subscribe((state, prev) => {
-      if (state.alertQueue !== prev.alertQueue) pick();
+  // Pull any 'new' alerts out of the store queue and ingest them. Idempotent —
+  // processedIds guards against double-ingest.
+  const ingestNewAlerts = useCallback(() => {
+    useStore.getState().alertQueue.forEach(a => {
+      if (a.status === "new" && !processedIds.current.has(a.id)) {
+        processedIds.current.add(a.id);
+        useStore.getState().updateAlertStatus(a.id, "acknowledged");
+        ingest(a, "alert-gen");
+      }
     });
-    return () => { unsub(); processedIds.current.clear(); };
   }, [ingest]);
+
+  // Primary path: direct store subscription fires synchronously on every
+  // pushAlert, bypassing React's effect scheduling.
+  useEffect(() => {
+    ingestNewAlerts(); // catch alerts already in queue on mount
+    const unsub = useStore.subscribe((state, prev) => {
+      if (state.alertQueue !== prev.alertQueue) ingestNewAlerts();
+    });
+    return () => { unsub(); };
+  }, [ingestNewAlerts]);
+
+  // Safety-net poll: guarantees any 'new' alert is ingested even if the
+  // subscription missed an update during a StrictMode remount window.
+  useEffect(() => {
+    const poll = setInterval(ingestNewAlerts, 1500);
+    return () => clearInterval(poll);
+  }, [ingestNewAlerts]);
 
   // 5-minute analysis progress ticker (runs independently of pipeline tick)
   useEffect(() => {
