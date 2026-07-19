@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../../lib/store'
-import { USE_CASES, groqGenerateAlert, parseAlert, buildAlertQueueItem, GROQ_KEY_STORAGE } from './alertGenUtils'
+import { USE_CASES, groqGenerateAlert, localGenerateAlert, parseAlert, buildAlertQueueItem, GROQ_KEY_STORAGE } from './alertGenUtils'
 
 // Headless component — always mounted in App, keeps auto-gen running across tab switches.
 export default function AlertGeneratorBackground() {
@@ -26,7 +26,6 @@ export default function AlertGeneratorBackground() {
     const run = async () => {
       if (inFlight.current) return
       const apiKey = localStorage.getItem(GROQ_KEY_STORAGE)?.trim()
-      if (!apiKey) return
 
       // When rotate is on, pick a random use case each tick
       const uc = autoGenRotate
@@ -35,10 +34,16 @@ export default function AlertGeneratorBackground() {
 
       inFlight.current = true
       try {
-        const raw  = await groqGenerateAlert(apiKey, uc)
-        if (!mounted) return
-        const data = parseAlert(raw)
-        const qi   = buildAlertQueueItem(data, uc)
+        let data
+        if (apiKey) {
+          const raw = await groqGenerateAlert(apiKey, uc)
+          if (!mounted) return
+          data = parseAlert(raw)
+        } else {
+          // No key — generate locally so auto mode still feeds the SOC pipeline
+          data = localGenerateAlert(uc)
+        }
+        const qi = buildAlertQueueItem(data, uc)
         pushAlert(qi)
         setAutoGenLastFiredAt(Date.now())
 
@@ -48,7 +53,13 @@ export default function AlertGeneratorBackground() {
           useStore.getState().pruneProcessedAlerts()
         }
       } catch {
-        // silent — errors visible in Alert Generator tab if user is watching
+        // Groq failed — fall back to a local alert so generation never stalls
+        try {
+          const data = localGenerateAlert(uc)
+          const qi = buildAlertQueueItem(data, uc)
+          pushAlert(qi)
+          setAutoGenLastFiredAt(Date.now())
+        } catch { /* give up this tick */ }
       } finally {
         inFlight.current = false
       }

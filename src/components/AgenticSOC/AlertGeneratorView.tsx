@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useStore } from '../../lib/store'
 import type { AlertQueueItem } from '../../lib/store'
 import {
-  USE_CASES, groqGenerateAlert, parseAlert, buildAlertQueueItem,
+  USE_CASES, groqGenerateAlert, localGenerateAlert, parseAlert, buildAlertQueueItem,
   type UseCaseId, type SiemAlert,
 } from './alertGenUtils'
 import {
@@ -218,19 +218,37 @@ export default function AlertGeneratorView() {
   // Manual generate (for the Generate Alert button in the view)
   const doGenerate = useCallback(async () => {
     if (generatingRef.current) return
-    if (!apiKey.trim()) { setError('Set your Groq API key first.'); return }
     generatingRef.current = true
     setGenerating(true)
     setError('')
     try {
-      const uc   = USE_CASES.find(u => u.id === selectedUC)!
-      const raw  = await groqGenerateAlert(apiKey.trim(), uc)
-      const data = parseAlert(raw)
-      const qi   = buildAlertQueueItem(data, uc)
+      const uc = USE_CASES.find(u => u.id === selectedUC)!
+      let data: SiemAlert
+      let raw = ''
+      if (apiKey.trim()) {
+        // AI-generated via Groq
+        raw  = await groqGenerateAlert(apiKey.trim(), uc)
+        data = parseAlert(raw)
+      } else {
+        // No key — local synthetic alert so the SOC pipeline still works
+        data = localGenerateAlert(uc)
+        raw  = JSON.stringify(data, null, 2)
+      }
+      const qi = buildAlertQueueItem(data, uc)
       setAlerts(prev => [{ id: qi.id, useCase: selectedUC, alert: data, raw, createdAt: Date.now() }, ...prev].slice(0, 200))
       pushAlert(qi)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e))
+      // If Groq fails, fall back to a local alert rather than producing nothing
+      try {
+        const uc = USE_CASES.find(u => u.id === selectedUC)!
+        const data = localGenerateAlert(uc)
+        const qi = buildAlertQueueItem(data, uc)
+        setAlerts(prev => [{ id: qi.id, useCase: selectedUC, alert: data, raw: JSON.stringify(data, null, 2), createdAt: Date.now() }, ...prev].slice(0, 200))
+        pushAlert(qi)
+        setError(`Groq failed (${e instanceof Error ? e.message : String(e)}) — used local alert instead.`)
+      } catch {
+        setError(e instanceof Error ? e.message : String(e))
+      }
     } finally {
       generatingRef.current = false
       setGenerating(false)
@@ -453,13 +471,13 @@ export default function AlertGeneratorView() {
 
           <div className="ml-auto flex items-center gap-2">
             {/* Manual generate */}
-            <button onClick={doGenerate} disabled={generating || !apiKey.trim()}
+            <button onClick={doGenerate} disabled={generating}
+              title={apiKey.trim() ? 'Generate an AI alert via Groq' : 'No Groq key — generates a local synthetic alert'}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all"
               style={{
                 background: generating ? 'rgba(251,191,36,0.06)' : 'rgba(251,191,36,0.12)',
                 border: `1px solid rgba(251,191,36,${generating ? '0.15' : '0.30'})`,
                 color: generating ? '#92400e' : '#fbbf24',
-                opacity: !apiKey.trim() ? 0.4 : 1,
               }}>
               {generating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               {generating ? 'Generating…' : 'Generate Alert'}
