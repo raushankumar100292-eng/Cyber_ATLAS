@@ -921,7 +921,7 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
   const fileRef = useRef<HTMLInputElement>(null);
   const pending = alertQueue.filter(a => a.status === "new").length;
   const opt     = SOURCE_OPTIONS.find(s => s.id === source);
-  const PANEL_H = source === "paste" ? 190 : source === "siem" ? 280 : source === "gen" ? 130 : 110;
+  const PANEL_H = source === "paste" ? 190 : source === "siem" ? 280 : source === "gen" ? 0 : 110;
 
   // ── Direct generation from within SOC ────────────────────────────────────
   const handleGenerate = async () => {
