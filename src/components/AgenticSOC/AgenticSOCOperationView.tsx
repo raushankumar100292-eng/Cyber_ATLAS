@@ -61,6 +61,23 @@ interface AgentSkills {
 }
 const AGENT_REGISTRY = new Map<string, AgentSkills>();
 
+// Mirror a trained/reused agent's skills into the shared store so the Agent Hub
+// can render a matching live agent card. Called on first train and on each reuse.
+function syncAgentToHub(skills: AgentSkills) {
+  useStore.getState().syncTrainedAgent({
+    alertType:          skills.alertType,
+    label:              skills.label,
+    color:              skills.color,
+    trainedAt:          skills.trainedAt,
+    lastRunAt:          Date.now(),
+    runCount:           skills.reuseCount + 1, // first train counts as run #1
+    investigationSteps: skills.investigationSteps ?? [],
+    iocPatterns:        skills.iocPatterns ?? [],
+    remediationSteps:   skills.remediationSteps ?? [],
+    commonTechniques:   skills.commonTechniques ?? [],
+  });
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface InsightAnalysis {
   threatActorProfile: string;
@@ -1321,6 +1338,7 @@ export default function AgenticSOCOperationView() {
               // REUSE — apply cached skills, zero AI tokens
               const insights = applySkills(skills, a.alert);
               skills.reuseCount++;
+              syncAgentToHub(skills); // update Hub card run count
               const mttr = Math.round((Date.now() - a.spawnAt) / 1000);
               pushLog(a.procId, a.alert.severity, `${skills.label} reuse #${skills.reuseCount} — 0 tokens, insight ready`);
               const needsApproval = insights.verdict !== "False Positive" && a.alert.severity === "CRITICAL";
@@ -1344,6 +1362,7 @@ export default function AgenticSOCOperationView() {
                     trainedAt: Date.now(), reuseCount: 0, sampleQueries: { splunk: [], kql: [] }, ...result.skills,
                   };
                   AGENT_REGISTRY.set(a.alert.useCase, newSkills);
+                  syncAgentToHub(newSkills); // create matching Agent Hub card
                   setRegVersion(v => v + 1);
 
                   // Ensure sampleQueries exists (Groq may omit it)

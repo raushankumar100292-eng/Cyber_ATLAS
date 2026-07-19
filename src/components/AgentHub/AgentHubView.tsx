@@ -1,5 +1,7 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useStore } from '../../lib/store'
+import type { TrainedAgentSkill } from '../../lib/store'
 import {
   Bot, Plus, Upload, Search, X, ChevronRight, Check,
   Cpu, Shield, Zap, Eye, Target, BookOpen, Settings,
@@ -154,6 +156,38 @@ function timeAgo(ts: number | null): string {
 }
 
 function uid() { return Math.random().toString(36).slice(2, 10) }
+
+// ── Map a SOC-trained agent (from the shared store) → Agent Hub card ───────────
+const SOC_CATEGORY: Record<string, AgentCategory> = {
+  phishing: 'detection', malware: 'detection', brute: 'detection', c2: 'detection',
+  lateral: 'hunting', insider: 'hunting',
+  exfil: 'intelligence', cloud: 'intelligence', supply: 'intelligence',
+  privesc: 'response',
+}
+function socAgentId(alertType: string) { return `soc-${alertType}` }
+
+function socToHubAgent(ta: TrainedAgentSkill): Agent {
+  const cap = (s: string) => (s.length > 46 ? s.slice(0, 46) + '…' : s)
+  const skills: AgentSkill[] = [
+    ...ta.investigationSteps.map((s, i) => ({ id: `${socAgentId(ta.alertType)}-inv-${i}`,  name: cap(s), category: 'Investigation', description: s, builtin: false })),
+    ...ta.remediationSteps.map((s, i)   => ({ id: `${socAgentId(ta.alertType)}-rem-${i}`,  name: cap(s), category: 'Response',      description: s, builtin: false })),
+    ...ta.commonTechniques.map((s, i)   => ({ id: `${socAgentId(ta.alertType)}-tech-${i}`, name: cap(s), category: 'Technique',     description: s, builtin: false })),
+  ]
+  return {
+    id: socAgentId(ta.alertType),
+    name: ta.label,
+    description: `Auto-trained by the SOC Master Agent from live ${ta.alertType} incidents. Applies ${ta.investigationSteps.length} investigation + ${ta.remediationSteps.length} remediation skills via zero-token skill reuse.`,
+    category: SOC_CATEGORY[ta.alertType] ?? 'detection',
+    status: 'active',
+    skills,
+    createdAt: ta.trainedAt,
+    lastRun: ta.lastRunAt,
+    runCount: ta.runCount,
+    author: 'SOC Master Agent',
+    version: `1.${ta.runCount}.0`,
+    tags: [ta.alertType, ...ta.commonTechniques.map(t => (t.split(':')[0] || '').trim()).filter(Boolean)].slice(0, 4),
+  }
+}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -638,6 +672,11 @@ function AgentTile({ agent, selected, onSelect, onDelete }: AgentTileProps) {
               <span className={clsx('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border', cm.color)}>
                 {cm.icon}{cm.label}
               </span>
+              {agent.author === 'SOC Master Agent' && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border text-violet-700 bg-violet-50 border-violet-200">
+                  <Sparkles className="w-2.5 h-2.5" /> SOC-trained
+                </span>
+              )}
               <span className="text-[10px] text-slate-400 font-mono">v{agent.version}</span>
             </div>
           </div>
@@ -900,8 +939,34 @@ function DetailPanel({ agent, onUpdate, onClose }: {
 // ── Main View ─────────────────────────────────────────────────────────────────
 
 export default function AgentHubView() {
+  const trainedAgents = useStore(s => s.trainedAgents)
   const [agents, setAgents]           = useState<Agent[]>(INITIAL_AGENTS)
   const [selectedId, setSelectedId]   = useState<string | null>(null)
+
+  // Merge SOC-trained agents from the shared store into the grid. New trained
+  // agents are prepended; reused ones refresh their live fields (runs, skills,
+  // status) while preserving any manual edits made in the Hub.
+  useEffect(() => {
+    setAgents(prev => {
+      const next = [...prev]
+      let changed = false
+      trainedAgents.forEach(ta => {
+        const mapped = socToHubAgent(ta)
+        const idx = next.findIndex(a => a.id === mapped.id)
+        if (idx >= 0) {
+          next[idx] = {
+            ...next[idx],
+            status: mapped.status, runCount: mapped.runCount, lastRun: mapped.lastRun,
+            version: mapped.version, skills: mapped.skills, tags: mapped.tags,
+          }
+        } else {
+          next.unshift(mapped)
+        }
+        changed = true
+      })
+      return changed ? next : prev
+    })
+  }, [trainedAgents])
   const [showNew, setShowNew]         = useState(false)
   const [showImport, setShowImport]   = useState(false)
   const [search, setSearch]           = useState('')

@@ -46,6 +46,22 @@ export interface ResolvedIncident {
   threatActorProfile: string
 }
 
+// Skills learned by a specialized SOC agent — mirrored into the Agent Hub.
+// This is the shared "agent skill directory": the Master Agent writes here on
+// train/reuse, the Agent Hub reads from it to render live trained-agent cards.
+export interface TrainedAgentSkill {
+  alertType:          string   // use-case id, e.g. 'phishing' (the registry key)
+  label:              string   // human label, e.g. 'Phishing Agent'
+  color:              string
+  trainedAt:          number
+  lastRunAt:          number
+  runCount:           number   // total incidents handled (first train + reuses)
+  investigationSteps: string[]
+  iocPatterns:        string[]
+  remediationSteps:   string[]
+  commonTechniques:   string[]
+}
+
 export type UploadStep = 'idle' | 'file-selected' | 'submitting' | 'ready' | 'analyzing' | 'done'
 
 export interface PendingFileInfo {
@@ -110,6 +126,11 @@ interface AppState {
   pushResolvedIncident: (inc: ResolvedIncident) => void
   clearResolvedIncidents: () => void
 
+  // trained-agent skill directory (SOC Master Agent → Agent Hub)
+  trainedAgents: TrainedAgentSkill[]
+  syncTrainedAgent: (agent: TrainedAgentSkill) => void
+  clearTrainedAgents: () => void
+
   // background auto-generation (persists across view changes)
   autoGenMode: boolean
   autoGenInterval: number     // seconds
@@ -133,6 +154,17 @@ interface AppState {
 function buildMap(data: CoverageDataset | null): Map<string, CoverageEntry> {
   if (!data) return new Map()
   return new Map(data.entries.map(e => [e.techniqueId, e]))
+}
+
+const TRAINED_AGENTS_KEY = 'atlas_trained_agents'
+function loadTrainedAgents(): TrainedAgentSkill[] {
+  try {
+    const raw = localStorage.getItem(TRAINED_AGENTS_KEY)
+    return raw ? (JSON.parse(raw) as TrainedAgentSkill[]) : []
+  } catch { return [] }
+}
+function saveTrainedAgents(agents: TrainedAgentSkill[]) {
+  try { localStorage.setItem(TRAINED_AGENTS_KEY, JSON.stringify(agents)) } catch { /* ignore quota */ }
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -170,6 +202,17 @@ export const useStore = create<AppState>((set, get) => ({
   resolvedIncidents: [],
   pushResolvedIncident: (inc) => set(s => ({ resolvedIncidents: [inc, ...s.resolvedIncidents].slice(0, 1000) })),
   clearResolvedIncidents: () => set({ resolvedIncidents: [] }),
+
+  trainedAgents: loadTrainedAgents(),
+  syncTrainedAgent: (agent) => set(s => {
+    const idx = s.trainedAgents.findIndex(a => a.alertType === agent.alertType)
+    const next = idx >= 0
+      ? s.trainedAgents.map(a => a.alertType === agent.alertType ? agent : a)
+      : [agent, ...s.trainedAgents]
+    saveTrainedAgents(next)
+    return { trainedAgents: next }
+  }),
+  clearTrainedAgents: () => { saveTrainedAgents([]); set({ trainedAgents: [] }) },
 
   autoGenMode: false,
   autoGenInterval: 60,
