@@ -1436,11 +1436,13 @@ export default function AgenticSOCOperationView() {
     return () => clearInterval(tick);
   }, [pushLog, apiKey, updateAlertStatus]);
 
-  // Retire resolved cards after 16s
+  // Retire resolved cards after 3 min so the board keeps showing recent activity
+  // instead of snapping back to "idle" between generation cycles. The 30-card cap
+  // in ingest() still bounds the list, so history self-manages.
   useEffect(() => {
     const t = setInterval(() => {
-      setProcessing(prev => prev.filter(a => !(a.done && Date.now() - a.spawnAt > 16000)));
-    }, 3000);
+      setProcessing(prev => prev.filter(a => !(a.done && Date.now() - a.spawnAt > 180000)));
+    }, 5000);
     return () => clearInterval(t);
   }, []);
 
