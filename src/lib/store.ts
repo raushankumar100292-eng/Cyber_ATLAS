@@ -180,7 +180,7 @@ export const useStore = create<AppState>((set, get) => ({
   view: 'globe',
   role: 'soc',
   uploadOpen: false,
-  apiKey: localStorage.getItem('atlas_groq_key') ?? '',
+  apiKey: (localStorage.getItem('atlas_groq_key') ?? '').trim(),
 
   coverage: null,
   coverageMap: new Map(),
@@ -238,7 +238,9 @@ export const useStore = create<AppState>((set, get) => ({
   setView: (v) => set({ view: v }),
   setRole: (r) => set({ role: r }),
   setUploadOpen: (o) => set({ uploadOpen: o }),
-  setApiKey: (key) => { localStorage.setItem('atlas_groq_key', key); set({ apiKey: key }) },
+  // Trim once at the single source so every reader (store subscribers + direct
+  // localStorage reads) sees the same canonical, whitespace-free key.
+  setApiKey: (key) => { const k = key.trim(); localStorage.setItem('atlas_groq_key', k); set({ apiKey: k }) },
   setCoverage: (data) => set({ coverage: data, coverageMap: buildMap(data), useCaseTacticMap: new Map() }),
   setUseCases: (useCases, analysis) => set({ useCases, useCaseAnalysis: analysis }),
   clearSelection: () => set({ selectedTacticId: null, selectedTechniqueId: null }),
