@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../../lib/store'
-import { USE_CASES, groqGenerateAlert, localGenerateAlert, parseAlert, buildAlertQueueItem, GROQ_KEY_STORAGE } from './alertGenUtils'
+import { USE_CASES, groqGenerateAlert, localGenerateAlert, parseAlert, buildAlertQueueItem } from './alertGenUtils'
 
 // Headless component — always mounted in App, keeps auto-gen running across tab switches.
 export default function AlertGeneratorBackground() {
@@ -25,7 +25,8 @@ export default function AlertGeneratorBackground() {
 
     const run = async () => {
       if (inFlight.current) return
-      const apiKey = localStorage.getItem(GROQ_KEY_STORAGE)?.trim()
+      // Read the key from the store each tick so key changes propagate immediately
+      const apiKey = useStore.getState().apiKey?.trim()
 
       // When rotate is on, pick a random use case each tick
       const uc = autoGenRotate

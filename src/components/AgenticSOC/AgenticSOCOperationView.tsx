@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useStore } from "../../lib/store";
 import type { AlertQueueItem, ResolvedIncident } from "../../lib/store";
 import { groqGenerateAlert, parseAlert, buildAlertQueueItem, USE_CASES } from "./alertGenUtils";
-import type { UseCaseId } from "./alertGenUtils";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
@@ -28,7 +27,6 @@ const STAGE_NOTES: Record<string, string[]> = {
   Respond:     ["executing containment", "requesting SOAR playbook", "validating action scope"],
   Resolved:    ["closing incident", "writing case summary"],
 };
-const GROQ_KEY = "atlas_groq_key";
 
 // ── Specialized agent config per use case ─────────────────────────────────────
 interface AgentConf { label: string; shortLabel: string; color: string; icon: string }
@@ -914,13 +912,9 @@ const SIEM_DEFAULTS: Record<SiemTab, { placeholder: string; docUrl: string; samp
 function IngestionPanel({ source, onIngest }: { source: SourceId | null; onIngest: (a: AlertQueueItem, src: ProcessingAgent["source"]) => void }) {
   const alertQueue = useStore(s => s.alertQueue);
   const apiKey     = useStore(s => s.apiKey);
-  const pushAlert  = useStore(s => s.pushAlert);
 
   const [json,          setJson]          = useState("");
   const [err,           setErr]           = useState("");
-  const [genUC,         setGenUC]         = useState<UseCaseId>("phishing");
-  const [generating,    setGenerating]    = useState(false);
-  const [genErr,        setGenErr]        = useState("");
 
   // SIEM connect state
   const [siemTab,       setSiemTab]       = useState<SiemTab>("splunk");
@@ -938,22 +932,8 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
   const fileRef = useRef<HTMLInputElement>(null);
   const pending = alertQueue.filter(a => a.status === "new").length;
   const opt     = SOURCE_OPTIONS.find(s => s.id === source);
+  // 'gen' auto-ingests from the shared queue — no panel needed, so collapse it.
   const PANEL_H = source === "paste" ? 190 : source === "siem" ? 280 : source === "gen" ? 0 : 110;
-
-  // ── Direct generation from within SOC ────────────────────────────────────
-  const handleGenerate = async () => {
-    if (!apiKey.trim()) { setGenErr("Set Groq API key first (gear icon in header)."); return; }
-    setGenerating(true); setGenErr("");
-    try {
-      const uc  = USE_CASES.find(u => u.id === genUC)!;
-      const raw = await groqGenerateAlert(apiKey.trim(), uc);
-      const data = parseAlert(raw);
-      const qi   = buildAlertQueueItem(data, uc);
-      pushAlert(qi);           // → lands in store queue
-      onIngest(qi, "alert-gen"); // → directly into SOC pipeline (bypasses queue delay)
-    } catch (e) { setGenErr(e instanceof Error ? e.message : String(e)); }
-    finally { setGenerating(false); }
-  };
 
   // ── SIEM polling logic ────────────────────────────────────────────────────
   const siemPoll = useCallback(async () => {
@@ -1074,36 +1054,7 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
           </div>
           <div style={{ width: 1, background: C.line, alignSelf: "stretch", flexShrink: 0 }} />
 
-          {/* ── Alert Generator feed ── */}
-          {source === "gen" && (
-            <div style={{ flex: 1, display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {/* Queue status */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderRadius: 8, background: C.panel, border: `1px solid ${pending > 0 ? C.live + "50" : C.line}`, minWidth: 180 }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: pending > 0 ? C.live : C.mut2, animation: pending > 0 ? "soc-pulse 1.5s ease-in-out infinite" : "none", flexShrink: 0 }} />
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: C.text }}>Alert Generator feed</div>
-                  <div className="soc-mono" style={{ fontSize: 9.5, color: pending > 0 ? C.live : C.mut2 }}>{pending > 0 ? `${pending} alert${pending !== 1 ? "s" : ""} pending` : "queue empty"}</div>
-                </div>
-              </div>
-              {/* Direct generate */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: C.panel, border: `1px solid ${C.line}` }}>
-                <select value={genUC} onChange={e => setGenUC(e.target.value as UseCaseId)}
-                  style={{ height: 28, background: C.panelHi, border: `1px solid ${C.lineHi}`, borderRadius: 6, padding: "0 8px", color: C.text, fontSize: 10, fontFamily: "inherit", outline: "none" }}>
-                  {USE_CASES.map(u => <option key={u.id} value={u.id} style={{ background: C.bg }}>{u.label}</option>)}
-                </select>
-                <button className="soc-btn" onClick={handleGenerate} disabled={generating}
-                  style={{ height: 28, padding: "0 14px", borderRadius: 6, border: "none", background: generating ? C.line : C.amber, color: generating ? C.mut2 : C.bg, fontSize: 10, fontWeight: 700, fontFamily: "inherit", cursor: generating ? "default" : "pointer", whiteSpace: "nowrap" }}>
-                  {generating ? "Generating…" : "⚡ Generate Now"}
-                </button>
-              </div>
-              {genErr && <div style={{ alignSelf: "center", fontSize: 9.5, color: C.crit }}>{genErr}</div>}
-              {!genErr && (
-                <div style={{ flex: 1, padding: "7px 11px", borderRadius: 8, background: `${C.live}07`, border: `1px solid ${C.live}18`, fontSize: 10, color: C.mut, lineHeight: 1.55, minWidth: 180 }}>
-                  Background alerts auto-ingest. Use <b style={{ color: C.amber }}>⚡ Generate Now</b> to fire one immediately into the pipeline.
-                </div>
-              )}
-            </div>
-          )}
+          {/* 'gen' auto-ingests from the shared queue — no panel content. */}
 
           {/* ── Paste JSON ── */}
           {source === "paste" && (

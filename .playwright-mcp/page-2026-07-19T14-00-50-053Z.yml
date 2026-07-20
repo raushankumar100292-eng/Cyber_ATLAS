@@ -1,0 +1,62 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e9]:
+      - generic [ref=e10]: ATLAS
+      - generic [ref=e11]: Coverage Navigator
+    - navigation [ref=e13]:
+      - button "Globe View" [ref=e14]
+      - button "Matrix View" [ref=e18]
+      - button "Data Upload" [ref=e21]
+      - button "Data Analyzer" [ref=e25]
+      - button "Alert Generator" [ref=e29]
+      - button "SOC Triage" [ref=e32]
+    - textbox "Search tactics & techniques…" [ref=e37]
+    - button "SOC Analyst Groq not set" [ref=e40]:
+      - generic [ref=e41]: SOC Analyst
+      - generic "Groq not set" [ref=e42]
+  - main [ref=e46]:
+    - generic [ref=e48]:
+      - generic [ref=e49]:
+        - generic [ref=e52]:
+          - generic:
+            - img:
+              - generic: MITRE
+              - generic: ATT&CK
+        - generic: Reconnaissance
+        - generic: Resource Development
+        - generic: Initial Access
+        - generic: Execution
+        - generic: Persistence
+        - generic: Privilege Escalation
+        - generic: Defense Evasion
+        - generic: Credential Access
+        - generic: Discovery
+        - generic: Lateral Movement
+        - generic: Collection
+        - generic: Command and Control
+        - generic: Exfiltration
+        - generic: Impact
+      - generic:
+        - generic:
+          - generic: MITRE ATT&CK Enterprise
+          - generic: "2026"
+        - generic:
+          - generic:
+            - generic: "14"
+            - generic: Tactics
+          - generic:
+            - generic: "211"
+            - generic: Techniques
+          - generic:
+            - generic: "468"
+            - generic: Sub-Techniques
+          - generic:
+            - generic: "44"
+            - generic: Mitigations
+          - generic:
+            - generic: "0"
+            - generic: Case Studies
+      - generic: "N"
+      - generic: E
+      - generic: S
+      - generic: W
