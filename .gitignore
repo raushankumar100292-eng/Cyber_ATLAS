@@ -4,3 +4,7 @@ dist/
 *.local
 .env
 .env.*
+
+# local artifacts
+.playwright-mcp/
+__pycache__/
