@@ -29,6 +29,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
+// Build marker — bump when shipping SOC pipeline fixes. Lets us confirm the
+// browser is running fresh code (check the console) vs a cached old bundle.
+export const ATLAS_BUILD = 'soc-ingest-2026-07-20-b'
+console.log(`%c[ATLAS build] ${ATLAS_BUILD}`, 'color:#00e5ff;font-weight:bold')
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>

@@ -8,3 +8,4 @@ dist/
 # local artifacts
 .playwright-mcp/
 __pycache__/
+vite.config.ts.timestamp-*.mjs
