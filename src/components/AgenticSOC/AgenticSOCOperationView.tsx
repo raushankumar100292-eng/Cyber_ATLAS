@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useStore } from "../../lib/store";
 import type { AlertQueueItem, ResolvedIncident } from "../../lib/store";
-import { groqGenerateAlert, parseAlert, buildAlertQueueItem, USE_CASES } from "./alertGenUtils";
+import { groqGenerateAlert, parseAlert, buildAlertQueueItem, localGenerateAlert, USE_CASES } from "./alertGenUtils";
+import AcnAssistant from "./AcnAssistant";
+import { saveTriage } from "../../lib/socDb";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
@@ -126,9 +128,8 @@ interface LogEntry { t: number; procId: string; sev: string; msg: string; }
 interface Metrics  { tp: number; fp: number; escalated: number; totalMttr: number; resolved: number; }
 
 // ── Ingestion source config ───────────────────────────────────────────────────
-type SourceId = "gen" | "paste" | "upload" | "siem";
+type SourceId = "paste" | "upload" | "siem";
 const SOURCE_OPTIONS: { id: SourceId; label: string; icon: string; desc: string; color: string }[] = [
-  { id: "gen",    label: "Alert Generator", icon: "⚡", desc: "Auto-picks from shared queue",        color: C.amber  },
   { id: "paste",  label: "Paste JSON",      icon: "{}", desc: "Any SIEM JSON — native or custom",    color: C.purple },
   { id: "upload", label: "File Upload",     icon: "↑",  desc: ".json file — single or array",        color: C.med    },
   { id: "siem",   label: "SIEM Connect",    icon: "⊕",  desc: "Splunk · Sentinel · Elastic guides",  color: C.live   },
@@ -912,9 +913,11 @@ const SIEM_DEFAULTS: Record<SiemTab, { placeholder: string; docUrl: string; samp
 function IngestionPanel({ source, onIngest }: { source: SourceId | null; onIngest: (a: AlertQueueItem, src: ProcessingAgent["source"]) => void }) {
   const alertQueue = useStore(s => s.alertQueue);
   const apiKey     = useStore(s => s.apiKey);
+  const pushAlert  = useStore(s => s.pushAlert);
 
   const [json,          setJson]          = useState("");
   const [err,           setErr]           = useState("");
+
 
   // SIEM connect state
   const [siemTab,       setSiemTab]       = useState<SiemTab>("splunk");
@@ -930,10 +933,8 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
   useEffect(() => { siemMountedRef.current = true; return () => { siemMountedRef.current = false; if (siemTimerRef.current) clearInterval(siemTimerRef.current); }; }, []);
 
   const fileRef = useRef<HTMLInputElement>(null);
-  const pending = alertQueue.filter(a => a.status === "new").length;
   const opt     = SOURCE_OPTIONS.find(s => s.id === source);
-  // 'gen' auto-ingests from the shared queue — no panel needed, so collapse it.
-  const PANEL_H = source === "paste" ? 190 : source === "siem" ? 280 : source === "gen" ? 0 : 110;
+  const PANEL_H = source === "paste" ? 190 : source === "siem" ? 280 : 110;
 
   // ── SIEM polling logic ────────────────────────────────────────────────────
   const siemPoll = useCallback(async () => {
@@ -1053,8 +1054,6 @@ function IngestionPanel({ source, onIngest }: { source: SourceId | null; onInges
             <div className="soc-mono" style={{ fontSize: 8, color: opt?.color, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap" }}>{opt?.label}</div>
           </div>
           <div style={{ width: 1, background: C.line, alignSelf: "stretch", flexShrink: 0 }} />
-
-          {/* 'gen' auto-ingests from the shared queue — no panel content. */}
 
           {/* ── Paste JSON ── */}
           {source === "paste" && (
@@ -1179,7 +1178,7 @@ export default function AgenticSOCOperationView() {
   const [metrics,      setMetrics]      = useState<Metrics>({ tp: 0, fp: 0, escalated: 0, totalMttr: 0, resolved: 0 });
   const [reduced,      setReduced]      = useState(false);
   const apiKey        = useStore(s => s.apiKey);
-  const [activeSource, setActiveSource] = useState<SourceId | null>("gen");
+  const [activeSource, setActiveSource] = useState<SourceId | null>(null);
   const [regVersion,   setRegVersion]   = useState(0); // bump to re-render registry
 
   const processedIds  = useRef(new Set<string>());
@@ -1406,12 +1405,14 @@ export default function AgenticSOCOperationView() {
           pushLog(procId, a.alert.severity, "approved → containment executing");
           setMetrics(m => ({ ...m, tp: m.tp + 1, totalMttr: m.totalMttr + mttr, resolved: m.resolved + 1 }));
           updateAlertStatus(a.alert.id, "dispatched");
+          saveTriage({ incidentNo: a.alert.incidentNo ?? "", alertId: a.alert.alertId, decision: "approved", priority: a.alert.severity, notes: a.note });
           if (a.insights) pushResolvedIncident(buildResolved(a, a.insights, mttr));
           return { ...a, approval: "approved", stageIdx: 4, note: STAGE_NOTES.Respond[1], mttr };
         }
         pushLog(procId, a.alert.severity, "escalated to human analyst");
         setMetrics(m => ({ ...m, escalated: m.escalated + 1, totalMttr: m.totalMttr + mttr, resolved: m.resolved + 1 }));
         updateAlertStatus(a.alert.id, "dismissed");
+        saveTriage({ incidentNo: a.alert.incidentNo ?? "", alertId: a.alert.alertId, decision: "escalated", priority: a.alert.severity, notes: "escalated to human analyst" });
         return { ...a, approval: "rejected", stageIdx: 5, done: true, note: "escalated", mttr };
       })
     );
@@ -1466,7 +1467,10 @@ export default function AgenticSOCOperationView() {
         <IngestionDropdown active={activeSource} onSelect={setActiveSource} />
         <div style={{ width: 1, height: 26, background: C.line }} />
 
-        <div style={{ flex: 1 }} />
+        {/* Center: ACN AI voice assistant launcher (marked location) */}
+        <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+          <AcnAssistant />
+        </div>
         <Stat label="Ingested" value={metrics.tp + metrics.fp + metrics.escalated} color={C.text} />
         <div style={{ width: 1, height: 26, background: C.line }} />
         <Stat label="Active"   value={active}  color={C.live} />

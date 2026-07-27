@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import type { Role, CoverageDataset, CoverageEntry, UseCaseEntry, UseCaseAnalysis } from './types'
+import { saveAlert, saveIncident, nextIncidentNo } from './socDb'
 
 export type ViewMode = 'globe' | 'matrix' | 'upload' | 'delta' | 'spl-kql' | 'soar' | 'architect' | 'agentic-soc' | 'alert-gen' | 'soc-triage' | 'soc-analytics' | 'soc-campaigns' | 'soc-ioc' | 'prompt-eng' | 'agent-hub'
 
 export interface AlertQueueItem {
   id:                string
+  incidentNo?:       string   // assigned on ingest into the queue; DB primary reference
   useCase:           string
   useCaseLabel:      string
   severity:          'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO'
@@ -87,6 +89,9 @@ interface AppState {
   uploadOpen: boolean
   apiKey: string
   setApiKey: (key: string) => void
+  // Gemini key powers the ACN voice assistant (separate from the Groq key)
+  geminiKey: string
+  setGeminiKey: (key: string) => void
 
   // live coverage data (applied to dashboard)
   coverage: CoverageDataset | null
@@ -181,6 +186,7 @@ export const useStore = create<AppState>((set, get) => ({
   role: 'soc',
   uploadOpen: false,
   apiKey: (localStorage.getItem('atlas_groq_key') ?? '').trim(),
+  geminiKey: (localStorage.getItem('atlas_gemini_key') ?? '').trim(),
 
   coverage: null,
   coverageMap: new Map(),
@@ -193,7 +199,12 @@ export const useStore = create<AppState>((set, get) => ({
   pendingData: null,
 
   alertQueue: [],
-  pushAlert: (item) => set(s => ({ alertQueue: [item, ...s.alertQueue].slice(0, 500) })),
+  pushAlert: (item) => {
+    // Assign an incident number once, then persist the full alert to Access.
+    const withNo = item.incidentNo ? item : { ...item, incidentNo: nextIncidentNo() }
+    saveAlert(withNo)
+    set(s => ({ alertQueue: [withNo, ...s.alertQueue].slice(0, 500) }))
+  },
   updateAlertStatus: (id, status) => set(s => ({
     alertQueue: s.alertQueue.map(a => a.id === id ? { ...a, status } : a),
   })),
@@ -205,7 +216,7 @@ export const useStore = create<AppState>((set, get) => ({
   pruneProcessedAlerts: () => set(s => ({ alertQueue: s.alertQueue.filter(a => a.status === 'new') })),
 
   resolvedIncidents: [],
-  pushResolvedIncident: (inc) => set(s => ({ resolvedIncidents: [inc, ...s.resolvedIncidents].slice(0, 1000) })),
+  pushResolvedIncident: (inc) => { saveIncident(inc); set(s => ({ resolvedIncidents: [inc, ...s.resolvedIncidents].slice(0, 1000) })) },
   clearResolvedIncidents: () => set({ resolvedIncidents: [] }),
 
   trainedAgents: loadTrainedAgents(),
@@ -241,6 +252,7 @@ export const useStore = create<AppState>((set, get) => ({
   // Trim once at the single source so every reader (store subscribers + direct
   // localStorage reads) sees the same canonical, whitespace-free key.
   setApiKey: (key) => { const k = key.trim(); localStorage.setItem('atlas_groq_key', k); set({ apiKey: k }) },
+  setGeminiKey: (key) => { const k = key.trim(); localStorage.setItem('atlas_gemini_key', k); set({ geminiKey: k }) },
   setCoverage: (data) => set({ coverage: data, coverageMap: buildMap(data), useCaseTacticMap: new Map() }),
   setUseCases: (useCases, analysis) => set({ useCases, useCaseAnalysis: analysis }),
   clearSelection: () => set({ selectedTacticId: null, selectedTechniqueId: null }),
