@@ -9,3 +9,6 @@ dist/
 .playwright-mcp/
 __pycache__/
 vite.config.ts.timestamp-*.mjs
+
+# local Access DB (generated at runtime)
+db_service/data/
