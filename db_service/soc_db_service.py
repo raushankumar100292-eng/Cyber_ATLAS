@@ -110,8 +110,8 @@ TABLES: dict[str, str] = {
     "Iocs": """
         CREATE TABLE Iocs (
             Id AUTOINCREMENT PRIMARY KEY,
-            IncidentNo TEXT(50), Type TEXT(40), Value TEXT(255),
-            Severity TEXT(20), Source TEXT(120), FirstSeen DATETIME
+            IncidentNo TEXT(50), [Type] TEXT(40), [Value] TEXT(255),
+            Severity TEXT(20), [Source] TEXT(120), FirstSeen DATETIME
         )""",
 }
 
