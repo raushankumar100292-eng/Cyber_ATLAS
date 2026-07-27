@@ -165,19 +165,36 @@ export default function AcnAssistant() {
         @keyframes acn-pulse { 0%,100%{transform:scale(1);opacity:.85} 50%{transform:scale(1.12);opacity:1} }
         @keyframes acn-wave { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
         @keyframes acn-in { from{opacity:0;transform:translateY(8px) scale(.98)} to{opacity:1;transform:none} }
+        @keyframes acn-spin3d { 0%{transform:rotateY(0deg)} 100%{transform:rotateY(360deg)} }
+        @keyframes acn-float3d { 0%,100%{transform:translateY(0) rotateY(-18deg)} 50%{transform:translateY(-2px) rotateY(18deg)} }
         .acn-bar { animation: acn-wave 0.9s ease-in-out infinite; transform-origin: center; }
+        /* 3D extruded Accenture ">" mark */
+        .acn-mark3d {
+          color: #ffffff; font-weight: 900; line-height: 1; font-family: Arial, sans-serif;
+          text-shadow:
+            1px 1px 0 ${ACN.purpleHi}, 2px 2px 0 ${ACN.purple},
+            3px 3px 0 ${ACN.purpleDk}, 4px 4px 1px rgba(60,0,110,0.9),
+            5px 6px 6px rgba(0,0,0,0.55);
+          transform: translateZ(0);
+        }
       `}</style>
 
-      {/* ── Floating ACN launcher (marked location) ── */}
+      {/* ── Floating ACN launcher (marked location) — 3D Accenture mark ── */}
       <button onClick={launch} title="ACN — AI SOC Assistant"
+        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px) scale(1.06)' }}
+        onMouseLeave={e => { e.currentTarget.style.transform = 'none' }}
         style={{
-          position: 'relative', width: 40, height: 40, borderRadius: '50%', border: 'none', cursor: 'pointer',
-          background: `radial-gradient(circle at 30% 30%, ${ACN.purpleHi}, ${ACN.purple} 55%, ${ACN.purpleDk})`,
-          boxShadow: `0 0 0 1px ${ACN.purple}55, 0 4px 18px ${ACN.purple}66`,
+          position: 'relative', width: 42, height: 42, borderRadius: '50%', border: 'none', cursor: 'pointer',
+          // spherical 3D body: bright top-left highlight → deep bottom-right
+          background: `radial-gradient(circle at 32% 26%, #F4E0FF 0%, ${ACN.purpleHi} 26%, ${ACN.purple} 58%, ${ACN.purpleDk} 100%)`,
+          boxShadow: `inset 0 2px 4px rgba(255,255,255,0.55), inset 0 -5px 9px rgba(40,0,80,0.7), 0 0 0 1px ${ACN.purple}55, 0 6px 16px ${ACN.purple}77, 0 2px 4px rgba(0,0,0,0.4)`,
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          transition: 'transform 0.18s ease', perspective: 220,
         }}>
-        {/* Accenture ">" mark */}
-        <span style={{ color: '#fff', fontWeight: 800, fontSize: 18, lineHeight: 1, transform: 'translateY(-1px)' }}>&gt;</span>
+        {/* glossy top highlight */}
+        <span style={{ position: 'absolute', top: 4, left: 8, right: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0))', pointerEvents: 'none' }} />
+        {/* Accenture ">" mark, extruded + gently rotating in 3D */}
+        <span className="acn-mark3d" style={{ fontSize: 19, transform: 'translateX(-1px)', animation: 'acn-float3d 4s ease-in-out infinite' }}>&gt;</span>
         <span style={{ position: 'absolute', inset: -3, borderRadius: '50%', border: `2px solid ${ACN.purpleHi}`, borderTopColor: 'transparent', animation: 'acn-ring 3s linear infinite', opacity: 0.7 }} />
       </button>
 
@@ -193,8 +210,8 @@ export default function AcnAssistant() {
           }}>
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: `1px solid ${ACN.line}`, background: `linear-gradient(90deg, ${ACN.purple}14, transparent)` }}>
-              <div style={{ width: 34, height: 34, borderRadius: '50%', background: `radial-gradient(circle at 30% 30%, ${ACN.purpleHi}, ${ACN.purpleDk})`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 0 14px ${ACN.purple}77` }}>
-                <span style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>&gt;</span>
+              <div style={{ width: 34, height: 34, borderRadius: '50%', background: `radial-gradient(circle at 32% 26%, #F4E0FF, ${ACN.purpleHi} 30%, ${ACN.purpleDk})`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `inset 0 1px 3px rgba(255,255,255,0.5), inset 0 -3px 6px rgba(40,0,80,0.6), 0 0 14px ${ACN.purple}77` }}>
+                <span className="acn-mark3d" style={{ fontSize: 15 }}>&gt;</span>
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: ACN.text, letterSpacing: 0.3 }}>ACN <span style={{ color: ACN.mut, fontWeight: 400, fontSize: 11 }}>· AI SOC Assistant</span></div>
@@ -211,12 +228,14 @@ export default function AcnAssistant() {
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '18px 0 10px' }}>
               <div style={{ position: 'relative', width: 96, height: 96, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: `conic-gradient(from 0deg, ${ACN.purple}, ${ACN.purpleHi}, ${ACN.purpleDk}, ${ACN.purple})`, filter: 'blur(6px)', opacity: orbActive ? 0.9 : 0.4, animation: orbActive ? 'acn-ring 2.4s linear infinite' : 'none' }} />
-                <div style={{ position: 'relative', width: 74, height: 74, borderRadius: '50%', background: `radial-gradient(circle at 35% 30%, ${ACN.purpleHi}, ${ACN.purpleDk})`, display: 'flex', alignItems: 'center', justifyContent: 'center', animation: orbActive ? 'acn-pulse 1.6s ease-in-out infinite' : 'none', boxShadow: `0 0 26px ${ACN.purple}88` }}>
+                <div style={{ position: 'relative', width: 74, height: 74, borderRadius: '50%', background: `radial-gradient(circle at 34% 28%, #F4E0FF 0%, ${ACN.purpleHi} 30%, ${ACN.purple} 62%, ${ACN.purpleDk} 100%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', animation: orbActive ? 'acn-pulse 1.6s ease-in-out infinite' : 'none', boxShadow: `inset 0 3px 6px rgba(255,255,255,0.5), inset 0 -8px 16px rgba(40,0,80,0.7), 0 0 26px ${ACN.purple}88`, perspective: 300 }}>
+                  {/* glossy top highlight */}
+                  <span style={{ position: 'absolute', top: 8, left: 16, right: 22, height: 18, borderRadius: '50%', background: 'linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0))', pointerEvents: 'none' }} />
                   {listening ? (
                     <div style={{ display: 'flex', gap: 3, alignItems: 'center', height: 26 }}>
                       {[0, 1, 2, 3, 4].map(i => <span key={i} className="acn-bar" style={{ width: 3, height: 22, background: '#fff', borderRadius: 2, animationDelay: `${i * 0.12}s` }} />)}
                     </div>
-                  ) : <span style={{ color: '#fff', fontWeight: 800, fontSize: 26 }}>&gt;</span>}
+                  ) : <span className="acn-mark3d" style={{ fontSize: 30, animation: 'acn-float3d 4s ease-in-out infinite' }}>&gt;</span>}
                 </div>
               </div>
               <div style={{ fontSize: 11, color: ACN.mut, textTransform: 'uppercase', letterSpacing: 1 }}>
