@@ -82,11 +82,13 @@ export default function AcnChat({ onClose }: { onClose: () => void }) {
   ]
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1500, display: 'flex', justifyContent: 'flex-end' }}>
-      <style>{`@keyframes acnc-in { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+    // Right-docked panel only — no full-screen backdrop, so the SOC stays fully
+    // visible and interactive while you chat with ACN.
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 400, maxWidth: '92vw', zIndex: 1500,
+      background: ACN.ink, borderLeft: `1px solid ${ACN.line}`, display: 'flex', flexDirection: 'column',
+      boxShadow: '-14px 0 48px rgba(0,0,0,.55)', animation: 'acnc-in .2s ease both', fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
+      <style>{`@keyframes acnc-in { from{opacity:0;transform:translateX(24px)} to{opacity:1;transform:none} }
         .acnc-mark { color:#fff;font-weight:900;font-family:Arial,sans-serif;text-shadow:1px 1px 0 ${ACN.purpleHi},2px 2px 0 ${ACN.purpleDk} }`}</style>
-      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(4,6,15,0.5)', backdropFilter: 'blur(2px)' }} />
-      <div style={{ position: 'relative', width: 420, maxWidth: '92vw', height: '100%', background: ACN.ink, borderLeft: `1px solid ${ACN.line}`, display: 'flex', flexDirection: 'column', boxShadow: '-12px 0 40px rgba(0,0,0,.5)', animation: 'acnc-in .2s ease both', fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
         {/* header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '15px 18px', borderBottom: `1px solid ${ACN.line}`, background: `linear-gradient(90deg, ${ACN.purple}14, transparent)` }}>
           <div style={{ width: 32, height: 32, borderRadius: '50%', background: `radial-gradient(circle at 32% 26%, #F4E0FF, ${ACN.purpleHi} 30%, ${ACN.purpleDk})`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -144,7 +146,6 @@ export default function AcnChat({ onClose }: { onClose: () => void }) {
           <button onClick={() => send(input)} disabled={thinking || !input.trim()}
             style={{ height: 40, padding: '0 16px', borderRadius: 20, border: 'none', background: input.trim() ? ACN.purple : ACN.line, color: '#fff', fontSize: 12, fontWeight: 700, cursor: input.trim() ? 'pointer' : 'default' }}>Send</button>
         </div>
-      </div>
     </div>
   )
 }

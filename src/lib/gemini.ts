@@ -23,26 +23,40 @@ export async function geminiGenerate(
   history: ChatTurn[],
   opts: { temperature?: number; maxTokens?: number } = {},
 ): Promise<string> {
-  const res = await fetch(GEMINI_URL(GEMINI_MODEL, apiKey), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: history.map(t => ({ role: t.role, parts: [{ text: t.text }] })),
-      generationConfig: {
-        temperature: opts.temperature ?? 0.6,
-        maxOutputTokens: opts.maxTokens ?? 1024,
-      },
-    }),
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: history.map(t => ({ role: t.role, parts: [{ text: t.text }] })),
+    generationConfig: {
+      temperature: opts.temperature ?? 0.6,
+      maxOutputTokens: opts.maxTokens ?? 1024,
+    },
   })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`Gemini ${res.status}: ${body.slice(0, 160)}`)
+
+  // Retry once on a rate-limit (429) — helps transient per-minute limits.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(GEMINI_URL(GEMINI_MODEL, apiKey), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    })
+    if (res.ok) {
+      const data = await res.json()
+      const text = data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? ''
+      if (!text) throw new Error('Gemini returned an empty response.')
+      return text.trim()
+    }
+    const errText = await res.text().catch(() => '')
+    if (res.status === 429 && attempt === 0) { await new Promise(r => setTimeout(r, 2000)); continue }
+    throw new Error(friendlyGeminiError(res.status, errText))
   }
-  const data = await res.json()
-  const text = data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? ''
-  if (!text) throw new Error('Gemini returned an empty response')
-  return text.trim()
+  throw new Error(friendlyGeminiError(429, ''))
+}
+
+// Turn raw Gemini HTTP errors into short, human messages (no raw JSON dumps).
+function friendlyGeminiError(status: number, body: string): string {
+  if (status === 429) return 'Gemini rate limit / quota reached. Wait a minute and try again, or check your Gemini plan & billing (a free-tier key has low limits).'
+  if (status === 400 && /API key not valid|API_KEY_INVALID/i.test(body)) return 'Your Gemini API key is invalid — please re-enter a valid key.'
+  if (status === 403) return 'Gemini rejected the key (403). Check the key and that the Generative Language API is enabled.'
+  if (status === 503) return 'Gemini is temporarily overloaded. Please try again in a moment.'
+  return `Gemini request failed (${status}). Please try again.`
 }
 
 // ── SOC context snapshot (the shared knowledge the assistant reasons over) ────
