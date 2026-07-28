@@ -1,320 +1,180 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useStore } from '../../lib/store'
-import { askAcn, CAPABILITIES, type ChatTurn, type CapabilityId } from '../../lib/gemini'
+import AcnImmersive from './AcnImmersive'
 
 // ── Accenture brand ───────────────────────────────────────────────────────────
 const ACN = {
-  purple:   '#A100FF', // Accenture signature purple
-  purpleHi: '#C64AFF',
-  purpleDk: '#6A00B0',
-  ink:      '#0B0E17',
-  panel:    '#121524',
-  line:     '#2A2140',
-  text:     '#ECE9F5',
-  mut:      '#9A92B8',
+  purple: '#A100FF', purpleHi: '#C64AFF', purpleDk: '#6A00B0',
+  ink: '#0B0E17', panel: '#141024', line: '#2A2140', text: '#ECE9F5', mut: '#9A92B8',
 }
 
-// ── Minimal Web Speech typings (not in TS lib DOM) ────────────────────────────
-interface SpeechRecognitionResultLike { transcript: string }
-interface SpeechRecognitionEventLike { results: ArrayLike<ArrayLike<SpeechRecognitionResultLike> & { isFinal: boolean }> }
-interface SpeechRecognitionLike {
+// ── Web Speech (wake word) typings ─────────────────────────────────────────────
+interface SRResult { transcript: string }
+interface SREvent { results: ArrayLike<ArrayLike<SRResult> & { isFinal: boolean }> }
+interface SRLike {
   lang: string; continuous: boolean; interimResults: boolean
-  start: () => void; stop: () => void
-  onresult: ((e: SpeechRecognitionEventLike) => void) | null
+  start: () => void; stop: () => void; abort: () => void
+  onresult: ((e: SREvent) => void) | null
   onend: (() => void) | null
   onerror: ((e: { error: string }) => void) | null
 }
-function getSpeechRecognition(): SpeechRecognitionLike | null {
-  const w = window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike }
-  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition
-  return Ctor ? new Ctor() : null
+function newRecognition(): SRLike | null {
+  const w = window as unknown as { SpeechRecognition?: new () => SRLike; webkitSpeechRecognition?: new () => SRLike }
+  const C = w.SpeechRecognition ?? w.webkitSpeechRecognition
+  return C ? new C() : null
 }
 
-interface Msg { role: 'user' | 'acn'; text: string; capability?: CapabilityId }
-
-const GREETING = "Hello! I'm ACN, your AI SOC Assistant. How may I help you today, Sir?"
-
-// Strip markdown-ish characters so TTS sounds natural
-const forSpeech = (t: string) => t.replace(/[*_`#>|]/g, '').replace(/\n{2,}/g, '. ').slice(0, 700)
+const WAKE = /tik tik on|tick tick on|tik tok on|tiktik on/i
 
 export default function AcnAssistant() {
   const geminiKey    = useStore(s => s.geminiKey)
   const setGeminiKey = useStore(s => s.setGeminiKey)
 
-  const [open,       setOpen]       = useState(false)
-  const [listening,  setListening]  = useState(false)
-  const [thinking,   setThinking]   = useState(false)
-  const [speaking,   setSpeaking]   = useState(false)
-  const [interim,    setInterim]    = useState('')
-  const [msgs,       setMsgs]       = useState<Msg[]>([])
-  const [textInput,  setTextInput]  = useState('')
-  const [keyDraft,   setKeyDraft]   = useState('')
-  const [voiceOn,    setVoiceOn]    = useState(true)
-  const [error,      setError]      = useState('')
+  const [immersive, setImmersive] = useState(false)
+  const [open,      setOpen]      = useState(false)   // launcher popover
+  const [armed,     setArmed]     = useState(false)   // wake-word listening
+  const [keyDraft,  setKeyDraft]  = useState('')
+  const [heard,     setHeard]     = useState('')
 
-  const recogRef  = useRef<SpeechRecognitionLike | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const historyRef = useRef<ChatTurn[]>([])
+  const wakeRef    = useRef<SRLike | null>(null)
+  const armedRef   = useRef(false)
+  const immersRef  = useRef(false)
+  const popRef     = useRef<HTMLDivElement>(null)
 
-  const sttSupported = typeof window !== 'undefined' && !!(getSpeechRecognition())
+  useEffect(() => { armedRef.current = armed }, [armed])
+  useEffect(() => { immersRef.current = immersive }, [immersive])
 
-  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [msgs, interim, thinking])
+  // close popover on outside click
+  useEffect(() => {
+    if (!open) return
+    const h = (e: MouseEvent) => { if (popRef.current && !popRef.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open])
 
-  // ── Text-to-speech ──────────────────────────────────────────────────────────
-  const speak = useCallback((text: string) => {
-    if (!voiceOn || typeof window === 'undefined' || !window.speechSynthesis) return
-    try {
-      window.speechSynthesis.cancel()
-      const u = new SpeechSynthesisUtterance(forSpeech(text))
-      u.rate = 1.02; u.pitch = 1.0
-      const prefer = window.speechSynthesis.getVoices().find(v => /Google (UK|US) English|Microsoft|Natural/i.test(v.name))
-      if (prefer) u.voice = prefer
-      u.onstart = () => setSpeaking(true)
-      u.onend   = () => setSpeaking(false)
-      window.speechSynthesis.speak(u)
-    } catch { /* speech synthesis unavailable */ }
-  }, [voiceOn])
-
-  const stopSpeaking = useCallback(() => {
-    try { window.speechSynthesis?.cancel() } catch { /* ignore */ }
-    setSpeaking(false)
+  // ── Wake-word listener (continuous) ────────────────────────────────────────────
+  const stopWake = useCallback(() => {
+    try { wakeRef.current?.abort() } catch { /* ignore */ }
+    wakeRef.current = null
   }, [])
 
-  // ── Send an utterance to ACN (voice or typed) ────────────────────────────────
-  const send = useCallback(async (utterance: string) => {
-    const text = utterance.trim()
-    if (!text || thinking) return
-    setError('')
-    setMsgs(m => [...m, { role: 'user', text }])
-    if (!geminiKey.trim()) { setError('Add your Gemini API key below to enable ACN.'); return }
-    setThinking(true)
-    try {
-      const { alertQueue, resolvedIncidents, trainedAgents } = useStore.getState()
-      const { text: reply, capability } = await askAcn(
-        geminiKey.trim(), text,
-        { alertQueue, resolvedIncidents, trainedAgents },
-        historyRef.current,
-      )
-      historyRef.current = [...historyRef.current, { role: 'user' as const, text }, { role: 'model' as const, text: reply }].slice(-12)
-      setMsgs(m => [...m, { role: 'acn', text: reply, capability }])
-      speak(reply)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setError(msg)
-      setMsgs(m => [...m, { role: 'acn', text: `I hit an error reaching my reasoning engine: ${msg}` }])
-    } finally {
-      setThinking(false)
-    }
-  }, [geminiKey, thinking, speak])
-
-  // ── Speech-to-text ────────────────────────────────────────────────────────────
-  const startListening = useCallback(() => {
-    const recog = getSpeechRecognition()
-    if (!recog) { setError('Voice input is not supported in this browser. Use Chrome, or type below.'); return }
-    stopSpeaking()
-    recog.lang = 'en-US'; recog.continuous = false; recog.interimResults = true
-    let finalText = ''
+  const startWake = useCallback(() => {
+    const recog = newRecognition()
+    if (!recog) return
+    recog.lang = 'en-US'; recog.continuous = true; recog.interimResults = true
     recog.onresult = (e) => {
-      let interimText = ''
-      for (let i = 0; i < e.results.length; i++) {
-        const r = e.results[i]
-        const txt = r[0].transcript
-        if (r.isFinal) finalText += txt; else interimText += txt
+      let txt = ''
+      for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript
+      setHeard(txt.trim().slice(-40))
+      if (WAKE.test(txt)) {
+        setHeard(''); setOpen(false)
+        stopWake()
+        setImmersive(true)
       }
-      setInterim(interimText)
     }
-    recog.onerror = (e) => { setError(e.error === 'not-allowed' ? 'Microphone permission denied.' : `Voice error: ${e.error}`); setListening(false) }
+    recog.onerror = () => { /* keep armed; onend will restart */ }
     recog.onend = () => {
-      setListening(false); setInterim('')
-      if (finalText.trim()) send(finalText)
+      // auto-restart while armed and not in immersive mode
+      if (armedRef.current && !immersRef.current) { try { recog.start() } catch { /* ignore */ } }
     }
-    recogRef.current = recog
-    setListening(true); setInterim('')
-    recog.start()
-  }, [send, stopSpeaking])
+    wakeRef.current = recog
+    try { recog.start() } catch { /* ignore */ }
+  }, [stopWake])
 
-  const stopListening = useCallback(() => { try { recogRef.current?.stop() } catch { /* ignore */ } setListening(false) }, [])
+  const toggleArm = useCallback(() => {
+    setArmed(a => {
+      const next = !a
+      if (next) startWake(); else stopWake()
+      return next
+    })
+  }, [startWake, stopWake])
 
-  // ── Open / close ──────────────────────────────────────────────────────────────
-  const launch = useCallback(() => {
-    setOpen(true)
-    if (msgs.length === 0) {
-      setMsgs([{ role: 'acn', text: GREETING }])
-      // Prime voices then greet aloud
-      setTimeout(() => speak(GREETING), 250)
-    }
-  }, [msgs.length, speak])
+  useEffect(() => () => stopWake(), [stopWake])
 
-  const close = useCallback(() => { stopListening(); stopSpeaking(); setOpen(false) }, [stopListening, stopSpeaking])
+  // When entering immersive, pause the wake listener; resume on exit if still armed.
+  const exitImmersive = useCallback(() => {
+    setImmersive(false)
+    if (armedRef.current) setTimeout(startWake, 400)
+  }, [startWake])
 
-  useEffect(() => () => { stopListening(); stopSpeaking() }, [stopListening, stopSpeaking])
-
-  const orbActive = listening || thinking || speaking
-  const orbState  = listening ? 'listening' : thinking ? 'thinking' : speaking ? 'speaking' : 'idle'
-
-  const QUICK = [
-    { label: 'Shift report',   q: 'Give me a SOC shift report of the current situation.' },
-    { label: 'Analyze threats', q: 'Analyze the current security events and highlight the top threats.' },
-    { label: 'Summarize incidents', q: 'Summarize the current incidents by severity.' },
-  ]
+  const launchNow = () => { setOpen(false); stopWake(); setImmersive(true) }
 
   return (
     <>
       <style>{`
-        @keyframes acn-ring { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
-        @keyframes acn-pulse { 0%,100%{transform:scale(1);opacity:.85} 50%{transform:scale(1.12);opacity:1} }
-        @keyframes acn-wave { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
-        @keyframes acn-in { from{opacity:0;transform:translateY(8px) scale(.98)} to{opacity:1;transform:none} }
-        @keyframes acn-spin3d { 0%{transform:rotateY(0deg)} 100%{transform:rotateY(360deg)} }
-        @keyframes acn-float3d { 0%,100%{transform:translateY(0) rotateY(-18deg)} 50%{transform:translateY(-2px) rotateY(18deg)} }
-        .acn-bar { animation: acn-wave 0.9s ease-in-out infinite; transform-origin: center; }
-        /* 3D extruded Accenture ">" mark */
-        .acn-mark3d {
-          color: #ffffff; font-weight: 900; line-height: 1; font-family: Arial, sans-serif;
-          text-shadow:
-            1px 1px 0 ${ACN.purpleHi}, 2px 2px 0 ${ACN.purple},
-            3px 3px 0 ${ACN.purpleDk}, 4px 4px 1px rgba(60,0,110,0.9),
-            5px 6px 6px rgba(0,0,0,0.55);
-          transform: translateZ(0);
-        }
+        @keyframes acn-ring { to { transform: rotate(360deg) } }
+        @keyframes acn-float3d { 0%,100%{ transform: translateY(0) rotateY(-18deg) } 50%{ transform: translateY(-2px) rotateY(18deg) } }
+        @keyframes acn-in { from{opacity:0;transform:translateY(-8px) scale(.97)} to{opacity:1;transform:none} }
+        @keyframes acn-livepulse { 0%,100%{ box-shadow:0 0 0 0 rgba(51,214,196,.5) } 50%{ box-shadow:0 0 0 6px rgba(51,214,196,0) } }
+        .acn-mark3d { color:#fff; font-weight:900; line-height:1; font-family:Arial,sans-serif;
+          text-shadow: 1px 1px 0 ${ACN.purpleHi}, 2px 2px 0 ${ACN.purple}, 3px 3px 0 ${ACN.purpleDk}, 4px 4px 1px rgba(60,0,110,.9), 5px 6px 6px rgba(0,0,0,.55); }
       `}</style>
 
-      {/* ── Floating ACN launcher (marked location) — 3D Accenture mark ── */}
-      <button onClick={launch} title="ACN — AI SOC Assistant"
-        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px) scale(1.06)' }}
-        onMouseLeave={e => { e.currentTarget.style.transform = 'none' }}
-        style={{
-          position: 'relative', width: 42, height: 42, borderRadius: '50%', border: 'none', cursor: 'pointer',
-          // spherical 3D body: bright top-left highlight → deep bottom-right
-          background: `radial-gradient(circle at 32% 26%, #F4E0FF 0%, ${ACN.purpleHi} 26%, ${ACN.purple} 58%, ${ACN.purpleDk} 100%)`,
-          boxShadow: `inset 0 2px 4px rgba(255,255,255,0.55), inset 0 -5px 9px rgba(40,0,80,0.7), 0 0 0 1px ${ACN.purple}55, 0 6px 16px ${ACN.purple}77, 0 2px 4px rgba(0,0,0,0.4)`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          transition: 'transform 0.18s ease', perspective: 220,
-        }}>
-        {/* glossy top highlight */}
-        <span style={{ position: 'absolute', top: 4, left: 8, right: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0))', pointerEvents: 'none' }} />
-        {/* Accenture ">" mark, extruded + gently rotating in 3D */}
-        <span className="acn-mark3d" style={{ fontSize: 19, transform: 'translateX(-1px)', animation: 'acn-float3d 4s ease-in-out infinite' }}>&gt;</span>
-        <span style={{ position: 'absolute', inset: -3, borderRadius: '50%', border: `2px solid ${ACN.purpleHi}`, borderTopColor: 'transparent', animation: 'acn-ring 3s linear infinite', opacity: 0.7 }} />
-      </button>
-
-      {/* ── Assistant panel ── */}
-      {open && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', justifyContent: 'flex-end' }}>
-          <div onClick={close} style={{ position: 'absolute', inset: 0, background: 'rgba(4,6,15,0.55)', backdropFilter: 'blur(2px)' }} />
-          <div style={{
-            position: 'relative', width: 420, maxWidth: '92vw', height: '100%', background: ACN.ink,
-            borderLeft: `1px solid ${ACN.line}`, display: 'flex', flexDirection: 'column',
-            boxShadow: '-12px 0 40px rgba(0,0,0,0.5)', animation: 'acn-in .2s ease both',
-            fontFamily: "'Space Grotesk', system-ui, sans-serif",
+      {/* ── Floating 3D launcher ── */}
+      <div ref={popRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <button onClick={() => setOpen(o => !o)} title="ACN — AI SOC Assistant"
+          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px) scale(1.06)' }}
+          onMouseLeave={e => { e.currentTarget.style.transform = 'none' }}
+          style={{
+            position: 'relative', width: 42, height: 42, borderRadius: '50%', border: 'none', cursor: 'pointer',
+            background: `radial-gradient(circle at 32% 26%, #F4E0FF 0%, ${ACN.purpleHi} 26%, ${ACN.purple} 58%, ${ACN.purpleDk} 100%)`,
+            boxShadow: `inset 0 2px 4px rgba(255,255,255,.55), inset 0 -5px 9px rgba(40,0,80,.7), 0 0 0 1px ${ACN.purple}55, 0 6px 16px ${ACN.purple}77`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'transform .18s ease', perspective: 220,
           }}>
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: `1px solid ${ACN.line}`, background: `linear-gradient(90deg, ${ACN.purple}14, transparent)` }}>
-              <div style={{ width: 34, height: 34, borderRadius: '50%', background: `radial-gradient(circle at 32% 26%, #F4E0FF, ${ACN.purpleHi} 30%, ${ACN.purpleDk})`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `inset 0 1px 3px rgba(255,255,255,0.5), inset 0 -3px 6px rgba(40,0,80,0.6), 0 0 14px ${ACN.purple}77` }}>
-                <span className="acn-mark3d" style={{ fontSize: 15 }}>&gt;</span>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: ACN.text, letterSpacing: 0.3 }}>ACN <span style={{ color: ACN.mut, fontWeight: 400, fontSize: 11 }}>· AI SOC Assistant</span></div>
-                <div style={{ fontSize: 10, color: ACN.purpleHi, textTransform: 'uppercase', letterSpacing: 1 }}>Accenture · Agentic SOC</div>
-              </div>
-              <button onClick={() => setVoiceOn(v => !v)} title={voiceOn ? 'Mute voice' : 'Unmute voice'}
-                style={{ background: 'transparent', border: `1px solid ${ACN.line}`, borderRadius: 8, color: voiceOn ? ACN.purpleHi : ACN.mut, cursor: 'pointer', padding: '5px 8px', fontSize: 11 }}>
-                {voiceOn ? '🔊' : '🔇'}
-              </button>
-              <button onClick={close} style={{ background: 'transparent', border: 'none', color: ACN.mut, cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
-            </div>
+          <span style={{ position: 'absolute', top: 4, left: 8, right: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(180deg, rgba(255,255,255,.6), rgba(255,255,255,0))', pointerEvents: 'none' }} />
+          <span className="acn-mark3d" style={{ fontSize: 19, transform: 'translateX(-1px)', animation: 'acn-float3d 4s ease-in-out infinite' }}>&gt;</span>
+          <span style={{ position: 'absolute', inset: -3, borderRadius: '50%', borderWidth: 2, borderStyle: 'solid', borderTopColor: 'transparent', borderRightColor: ACN.purpleHi, borderBottomColor: ACN.purpleHi, borderLeftColor: ACN.purpleHi, animation: 'acn-ring 3s linear infinite', opacity: 0.7 }} />
+        </button>
+        {/* armed indicator */}
+        {armed && !immersive && (
+          <span title="Listening for 'Tik Tik ON'" style={{ position: 'absolute', top: -2, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#33D6C4', border: '2px solid ' + ACN.ink, animation: 'acn-livepulse 1.6s infinite' }} />
+        )}
 
-            {/* Orb */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '18px 0 10px' }}>
-              <div style={{ position: 'relative', width: 96, height: 96, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: `conic-gradient(from 0deg, ${ACN.purple}, ${ACN.purpleHi}, ${ACN.purpleDk}, ${ACN.purple})`, filter: 'blur(6px)', opacity: orbActive ? 0.9 : 0.4, animation: orbActive ? 'acn-ring 2.4s linear infinite' : 'none' }} />
-                <div style={{ position: 'relative', width: 74, height: 74, borderRadius: '50%', background: `radial-gradient(circle at 34% 28%, #F4E0FF 0%, ${ACN.purpleHi} 30%, ${ACN.purple} 62%, ${ACN.purpleDk} 100%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', animation: orbActive ? 'acn-pulse 1.6s ease-in-out infinite' : 'none', boxShadow: `inset 0 3px 6px rgba(255,255,255,0.5), inset 0 -8px 16px rgba(40,0,80,0.7), 0 0 26px ${ACN.purple}88`, perspective: 300 }}>
-                  {/* glossy top highlight */}
-                  <span style={{ position: 'absolute', top: 8, left: 16, right: 22, height: 18, borderRadius: '50%', background: 'linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0))', pointerEvents: 'none' }} />
-                  {listening ? (
-                    <div style={{ display: 'flex', gap: 3, alignItems: 'center', height: 26 }}>
-                      {[0, 1, 2, 3, 4].map(i => <span key={i} className="acn-bar" style={{ width: 3, height: 22, background: '#fff', borderRadius: 2, animationDelay: `${i * 0.12}s` }} />)}
-                    </div>
-                  ) : <span className="acn-mark3d" style={{ fontSize: 30, animation: 'acn-float3d 4s ease-in-out infinite' }}>&gt;</span>}
-                </div>
+        {/* ── Launcher popover ── */}
+        {open && !immersive && (
+          <div style={{ position: 'absolute', top: 'calc(100% + 10px)', left: '50%', transform: 'translateX(-50%)', width: 268, background: ACN.panel, border: `1px solid ${ACN.line}`, borderRadius: 14, padding: 14, zIndex: 1000, boxShadow: '0 16px 44px rgba(0,0,0,.55)', animation: 'acn-in .16s ease both', fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
+              <div style={{ width: 30, height: 30, borderRadius: '50%', background: `radial-gradient(circle at 32% 26%, #F4E0FF, ${ACN.purpleHi} 30%, ${ACN.purpleDk})`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span className="acn-mark3d" style={{ fontSize: 14 }}>&gt;</span>
               </div>
-              <div style={{ fontSize: 11, color: ACN.mut, textTransform: 'uppercase', letterSpacing: 1 }}>
-                {orbState === 'listening' ? 'Listening…' : orbState === 'thinking' ? 'Thinking…' : orbState === 'speaking' ? 'Speaking…' : 'Tap the mic to talk'}
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: ACN.text }}>ACN Assistant</div>
+                <div style={{ fontSize: 9.5, color: ACN.purpleHi, textTransform: 'uppercase', letterSpacing: 1 }}>Voice-first · Multi-agent</div>
               </div>
             </div>
 
-            {/* Transcript */}
-            <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {msgs.map((m, i) => (
-                <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
-                  {m.role === 'acn' && m.capability && (
-                    <div style={{ fontSize: 8.5, color: ACN.purpleHi, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 3 }}>{CAPABILITIES[m.capability].label}</div>
-                  )}
-                  <div style={{
-                    fontSize: 12.5, lineHeight: 1.5, padding: '9px 12px', borderRadius: 12, whiteSpace: 'pre-wrap',
-                    background: m.role === 'user' ? `${ACN.purple}22` : ACN.panel,
-                    border: `1px solid ${m.role === 'user' ? ACN.purple + '55' : ACN.line}`,
-                    color: m.role === 'user' ? ACN.text : ACN.text,
-                    borderBottomRightRadius: m.role === 'user' ? 3 : 12,
-                    borderBottomLeftRadius: m.role === 'acn' ? 3 : 12,
-                  }}>{m.text}</div>
-                </div>
-              ))}
-              {interim && <div style={{ alignSelf: 'flex-end', fontSize: 12, color: ACN.mut, fontStyle: 'italic', padding: '4px 12px' }}>{interim}</div>}
-              {thinking && <div style={{ alignSelf: 'flex-start', fontSize: 12, color: ACN.purpleHi, padding: '4px 12px' }}>ACN is analyzing…</div>}
-              {error && <div style={{ fontSize: 11, color: '#ff6b6b', padding: '4px 12px' }}>{error}</div>}
-            </div>
+            <p style={{ fontSize: 11, color: ACN.mut, lineHeight: 1.5, margin: '0 0 12px' }}>
+              Say <b style={{ color: ACN.purpleHi }}>“Tik Tik ON”</b> to launch the immersive voice experience — or launch it directly below.
+            </p>
 
-            {/* Gemini key prompt */}
+            <button onClick={launchNow}
+              style={{ width: '100%', height: 38, borderRadius: 9, border: 'none', background: `linear-gradient(90deg, ${ACN.purple}, ${ACN.purpleHi})`, color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 8 }}>
+              ▶ Launch Immersive Mode
+            </button>
+
+            <button onClick={toggleArm}
+              style={{ width: '100%', height: 34, borderRadius: 9, border: `1px solid ${armed ? '#33D6C4' : ACN.line}`, background: armed ? 'rgba(51,214,196,0.10)' : 'transparent', color: armed ? '#33D6C4' : ACN.mut, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              🎙 {armed ? 'Listening for “Tik Tik ON”' : 'Arm hands-free wake word'}
+            </button>
+            {armed && heard && <div style={{ fontSize: 9, color: ACN.mut, marginTop: 6, textAlign: 'center', fontStyle: 'italic' }}>…{heard}</div>}
+
             {!geminiKey.trim() && (
-              <div style={{ padding: '10px 16px', borderTop: `1px solid ${ACN.line}`, background: `${ACN.purple}0C` }}>
-                <div style={{ fontSize: 10.5, color: ACN.mut, marginBottom: 6 }}>Enter your Google Gemini API key to activate ACN:</div>
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${ACN.line}` }}>
+                <div style={{ fontSize: 10, color: ACN.mut, marginBottom: 6 }}>Gemini API key (powers ACN):</div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <input value={keyDraft} onChange={e => setKeyDraft(e.target.value)} type="password" placeholder="AIza…"
-                    style={{ flex: 1, height: 30, background: ACN.panel, border: `1px solid ${ACN.line}`, borderRadius: 8, padding: '0 10px', color: ACN.text, fontSize: 11, outline: 'none' }} />
-                  <button onClick={() => { if (keyDraft.trim()) { setGeminiKey(keyDraft.trim()); setKeyDraft(''); setError('') } }}
-                    style={{ height: 30, padding: '0 14px', borderRadius: 8, border: 'none', background: ACN.purple, color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Save</button>
+                    style={{ flex: 1, height: 30, background: ACN.ink, border: `1px solid ${ACN.line}`, borderRadius: 7, padding: '0 9px', color: ACN.text, fontSize: 11, outline: 'none' }} />
+                  <button onClick={() => { if (keyDraft.trim()) { setGeminiKey(keyDraft.trim()); setKeyDraft('') } }}
+                    style={{ height: 30, padding: '0 12px', borderRadius: 7, border: 'none', background: ACN.purple, color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Save</button>
                 </div>
               </div>
             )}
-
-            {/* Quick actions */}
-            <div style={{ display: 'flex', gap: 6, padding: '8px 16px 0', flexWrap: 'wrap' }}>
-              {QUICK.map(q => (
-                <button key={q.label} onClick={() => send(q.q)} disabled={thinking}
-                  style={{ fontSize: 10.5, padding: '4px 10px', borderRadius: 20, border: `1px solid ${ACN.purple}44`, background: `${ACN.purple}14`, color: ACN.purpleHi, cursor: thinking ? 'default' : 'pointer' }}>
-                  {q.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Input row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px 16px' }}>
-              <button
-                onClick={listening ? stopListening : startListening}
-                disabled={thinking || !sttSupported}
-                title={sttSupported ? 'Push to talk' : 'Voice not supported in this browser'}
-                style={{
-                  width: 44, height: 44, borderRadius: '50%', flexShrink: 0, cursor: sttSupported ? 'pointer' : 'not-allowed',
-                  border: 'none', color: '#fff', fontSize: 18,
-                  background: listening ? '#ff3b6b' : `radial-gradient(circle at 30% 30%, ${ACN.purpleHi}, ${ACN.purpleDk})`,
-                  boxShadow: listening ? '0 0 18px #ff3b6b88' : `0 0 14px ${ACN.purple}66`,
-                  opacity: sttSupported ? 1 : 0.4,
-                  animation: listening ? 'acn-pulse 1.2s ease-in-out infinite' : 'none',
-                }}>
-                {listening ? '■' : '🎙'}
-              </button>
-              <input
-                value={textInput} onChange={e => setTextInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && textInput.trim()) { send(textInput); setTextInput('') } }}
-                placeholder="Ask ACN, or tap the mic…"
-                style={{ flex: 1, height: 40, background: ACN.panel, border: `1px solid ${ACN.line}`, borderRadius: 20, padding: '0 14px', color: ACN.text, fontSize: 12.5, outline: 'none' }} />
-              <button onClick={() => { if (textInput.trim()) { send(textInput); setTextInput('') } }} disabled={thinking || !textInput.trim()}
-                style={{ height: 40, padding: '0 16px', borderRadius: 20, border: 'none', background: textInput.trim() ? ACN.purple : ACN.line, color: '#fff', fontSize: 12, fontWeight: 700, cursor: textInput.trim() ? 'pointer' : 'default' }}>Send</button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
+
+      {/* ── Immersive full-screen mode ── */}
+      {immersive && <AcnImmersive onExit={exitImmersive} />}
     </>
   )
 }
