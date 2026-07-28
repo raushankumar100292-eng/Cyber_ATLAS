@@ -1218,6 +1218,26 @@ export default function AgenticSOCOperationView() {
     };
   }, []);
 
+  // Rehydrate the in-session agent registry from the persisted Agent Hub on load.
+  // This makes the Agent Hub the source of truth: when a new alert of a
+  // previously-trained use case arrives, the Master Agent finds the existing
+  // trained agent and REUSES its skills (0 tokens) instead of re-training —
+  // even across page reloads.
+  useEffect(() => {
+    if (AGENT_REGISTRY.size > 0) return;
+    const trained = useStore.getState().trainedAgents;
+    trained.forEach(ta => {
+      AGENT_REGISTRY.set(ta.alertType, {
+        alertType: ta.alertType, label: ta.label, color: ta.color,
+        trainedAt: ta.trainedAt, reuseCount: Math.max(0, ta.runCount - 1),
+        investigationSteps: ta.investigationSteps, iocPatterns: ta.iocPatterns,
+        remediationSteps: ta.remediationSteps, commonTechniques: ta.commonTechniques,
+        sampleQueries: { splunk: [], kql: [] },
+      });
+    });
+    if (trained.length) setRegVersion(v => v + 1);
+  }, []);
+
   const ingest = useCallback((alert: AlertQueueItem, source: ProcessingAgent["source"]) => {
     const procId      = `SOC-${++PROC_ID}`;
     const agentConf   = AGENT_CONFIG[alert.useCase] ?? AGENT_CONFIG.unknown;
