@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, forwardRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useStore } from '../../lib/store'
 import {
@@ -60,7 +60,7 @@ function SevBadge({ sev }: { sev: string }) {
 }
 
 // ── Alert card ────────────────────────────────────────────────────────────────
-function AlertCard({ entry, onCopy }: { entry: AlertEntry; onCopy: (e: AlertEntry) => void }) {
+const AlertCard = forwardRef<HTMLDivElement, { entry: AlertEntry; onCopy: (e: AlertEntry) => void }>(function AlertCard({ entry, onCopy }, ref) {
   const [open,   setOpen]   = useState(false)
   const [copied, setCopied] = useState(false)
   const a        = entry.alert
@@ -77,7 +77,7 @@ function AlertCard({ entry, onCopy }: { entry: AlertEntry; onCopy: (e: AlertEntr
   }
 
   return (
-    <motion.div layout initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+    <motion.div ref={ref} layout initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0, marginBottom: 0 }} transition={{ duration: 0.18 }}
       className="rounded-lg border overflow-hidden mb-2"
       style={{
@@ -205,7 +205,7 @@ function AlertCard({ entry, onCopy }: { entry: AlertEntry; onCopy: (e: AlertEntr
       </AnimatePresence>
     </motion.div>
   )
-}
+})
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 export default function AlertGeneratorView() {
