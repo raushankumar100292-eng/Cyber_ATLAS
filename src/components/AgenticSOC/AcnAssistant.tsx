@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useStore } from '../../lib/store'
 import AcnImmersive from './AcnImmersive'
+import AcnChat from './AcnChat'
 
 // ── Accenture brand ───────────────────────────────────────────────────────────
 const ACN = {
@@ -31,6 +32,7 @@ export default function AcnAssistant() {
   const setGeminiKey = useStore(s => s.setGeminiKey)
 
   const [immersive, setImmersive] = useState(false)
+  const [chat,      setChat]      = useState(false)   // text chat mode
   const [open,      setOpen]      = useState(false)   // launcher popover
   const [armed,     setArmed]     = useState(false)   // wake-word listening
   const [keyDraft,  setKeyDraft]  = useState('')
@@ -98,6 +100,7 @@ export default function AcnAssistant() {
   }, [startWake])
 
   const launchNow = () => { setOpen(false); stopWake(); setImmersive(true) }
+  const openChat  = () => { setOpen(false); setChat(true) }
 
   return (
     <>
@@ -152,6 +155,11 @@ export default function AcnAssistant() {
               ▶ Launch Immersive Mode
             </button>
 
+            <button onClick={openChat}
+              style={{ width: '100%', height: 36, borderRadius: 9, border: `1px solid ${ACN.purple}55`, background: `${ACN.purple}12`, color: ACN.text, fontSize: 12, fontWeight: 600, cursor: 'pointer', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              💬 Chat Mode
+            </button>
+
             <button onClick={toggleArm}
               style={{ width: '100%', height: 34, borderRadius: 9, border: `1px solid ${armed ? '#33D6C4' : ACN.line}`, background: armed ? 'rgba(51,214,196,0.10)' : 'transparent', color: armed ? '#33D6C4' : ACN.mut, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
               🎙 {armed ? 'Listening for “Tik Tik ON”' : 'Arm hands-free wake word'}
@@ -175,6 +183,9 @@ export default function AcnAssistant() {
 
       {/* ── Immersive full-screen mode ── */}
       {immersive && <AcnImmersive onExit={exitImmersive} />}
+
+      {/* ── Text chat mode ── */}
+      {chat && <AcnChat onClose={() => setChat(false)} />}
     </>
   )
 }
