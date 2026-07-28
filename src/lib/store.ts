@@ -4,6 +4,10 @@ import { saveAlert, saveIncident, nextIncidentNo } from './socDb'
 
 export type ViewMode = 'globe' | 'matrix' | 'upload' | 'delta' | 'spl-kql' | 'soar' | 'architect' | 'agentic-soc' | 'alert-gen' | 'soc-triage' | 'soc-analytics' | 'soc-campaigns' | 'soc-ioc' | 'prompt-eng' | 'agent-hub'
 
+// ── Alert-queue capacity (shared so UI + background runner stay in sync) ───────
+export const ALERT_QUEUE_CAP = 500        // hard cap; oldest dropped beyond this
+export const QUEUE_PRUNE_THRESHOLD = 30   // auto-prune processed alerts at/above this
+
 export interface AlertQueueItem {
   id:                string
   incidentNo?:       string   // assigned on ingest into the queue; DB primary reference
@@ -203,7 +207,7 @@ export const useStore = create<AppState>((set, get) => ({
     // Assign an incident number once, then persist the full alert to Access.
     const withNo = item.incidentNo ? item : { ...item, incidentNo: nextIncidentNo() }
     saveAlert(withNo)
-    set(s => ({ alertQueue: [withNo, ...s.alertQueue].slice(0, 500) }))
+    set(s => ({ alertQueue: [withNo, ...s.alertQueue].slice(0, ALERT_QUEUE_CAP) }))
   },
   updateAlertStatus: (id, status) => set(s => ({
     alertQueue: s.alertQueue.map(a => a.id === id ? { ...a, status } : a),

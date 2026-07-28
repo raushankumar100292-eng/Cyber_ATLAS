@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useStore } from '../../lib/store'
+import { useStore, QUEUE_PRUNE_THRESHOLD } from '../../lib/store'
 import { USE_CASES, groqGenerateAlert, localGenerateAlert, parseAlert, buildAlertQueueItem } from './alertGenUtils'
 
 // Headless component — always mounted in App, keeps auto-gen running across tab switches.
@@ -10,10 +10,6 @@ export default function AlertGeneratorBackground() {
   const autoGenRotate         = useStore(s => s.autoGenRotate)
   const pushAlert             = useStore(s => s.pushAlert)
   const setAutoGenLastFiredAt = useStore(s => s.setAutoGenLastFiredAt)
-
-  // Auto-clear threshold: once the queue holds this many processed alerts,
-  // prune them so long auto runs don't balloon the queue.
-  const QUEUE_PRUNE_THRESHOLD = 60
 
   // Prevent overlapping in-flight Groq calls
   const inFlight = useRef(false)

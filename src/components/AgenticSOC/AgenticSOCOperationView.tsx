@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useStore } from "../../lib/store";
+import { useStore, ALERT_QUEUE_CAP, QUEUE_PRUNE_THRESHOLD } from "../../lib/store";
 import type { AlertQueueItem, ResolvedIncident } from "../../lib/store";
 import { groqGenerateAlert, parseAlert, buildAlertQueueItem, localGenerateAlert, USE_CASES } from "./alertGenUtils";
 import AcnAssistant from "./AcnAssistant";
@@ -1178,6 +1178,7 @@ export default function AgenticSOCOperationView() {
   const [metrics,      setMetrics]      = useState<Metrics>({ tp: 0, fp: 0, escalated: 0, totalMttr: 0, resolved: 0 });
   const [reduced,      setReduced]      = useState(false);
   const apiKey        = useStore(s => s.apiKey);
+  const queueDepth    = useStore(s => s.alertQueue.length); // reactive, for the queue indicator
   // Default to the Alert Generator source so the dropdown reflects the always-on
   // auto-ingest feed (ingestion itself is independent of this selection).
   const [activeSource, setActiveSource] = useState<SourceId | null>("gen");
@@ -1227,7 +1228,7 @@ export default function AgenticSOCOperationView() {
       spawnAt: Date.now(), done: false, mttr: null, analyzing: false,
       analyzeProgress: 0, analyzeSubstage: "", showInsights: false, insightTab: "analysis",
     };
-    setProcessing(prev => [agent, ...prev].slice(0, 30));
+    setProcessing(prev => [agent, ...prev].slice(0, 50));
     pushLog(procId, alert.severity, `master agent → ${agentConf.label} [${hasSkills ? "skills cached" : "first run"}]`);
   }, [pushLog]);
 
@@ -1473,6 +1474,26 @@ export default function AgenticSOCOperationView() {
         <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
           <AcnAssistant />
         </div>
+
+        {/* Queue capacity indicator — flags when auto-prune / near hard cap */}
+        {(() => {
+          const pruning = queueDepth >= QUEUE_PRUNE_THRESHOLD;
+          const full    = queueDepth >= Math.floor(ALERT_QUEUE_CAP * 0.9);
+          const color   = full ? C.crit : pruning ? C.amber : C.mut2;
+          const label   = full ? "QUEUE FULL" : pruning ? "PRUNING" : "QUEUE";
+          const pct     = Math.min(100, Math.round((queueDepth / ALERT_QUEUE_CAP) * 100));
+          return (
+            <div title={`Alert queue depth ${queueDepth}/${ALERT_QUEUE_CAP} (${pct}%). Processed alerts auto-prune at ${QUEUE_PRUNE_THRESHOLD}; oldest dropped at ${ALERT_QUEUE_CAP}. Full history is kept in the database.`}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 9px", borderRadius: 8, background: `${color}12`, border: `1px solid ${color}33` }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, animation: (pruning && !reduced) ? "soc-pulse 1.3s ease-in-out infinite" : "none", flexShrink: 0 }} />
+              <div style={{ lineHeight: 1.05 }}>
+                <div className="soc-mono" style={{ fontSize: 11, fontWeight: 700, color }}>{queueDepth}<span style={{ color: C.mut2, fontWeight: 400 }}>/{ALERT_QUEUE_CAP}</span></div>
+                <div style={{ fontSize: 7.5, color, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+              </div>
+            </div>
+          );
+        })()}
+        <div style={{ width: 1, height: 26, background: C.line }} />
         <Stat label="Ingested" value={metrics.tp + metrics.fp + metrics.escalated} color={C.text} />
         <div style={{ width: 1, height: 26, background: C.line }} />
         <Stat label="Active"   value={active}  color={C.live} />
