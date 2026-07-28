@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useStore, ALERT_QUEUE_CAP, QUEUE_PRUNE_THRESHOLD } from "../../lib/store";
+import { useStore, ALERT_QUEUE_CAP, QUEUE_PRUNE_THRESHOLD, ATLAS_BUILD } from "../../lib/store";
 import type { AlertQueueItem, ResolvedIncident } from "../../lib/store";
 import { groqGenerateAlert, parseAlert, buildAlertQueueItem, localGenerateAlert, USE_CASES } from "./alertGenUtils";
 import AcnAssistant from "./AcnAssistant";
@@ -1461,7 +1461,10 @@ export default function AgenticSOCOperationView() {
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: active > 0 ? C.live : C.mut2, animation: active > 0 && !reduced ? "soc-pulse 1.8s ease-in-out infinite" : "none" }} />
           </div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: 0.2 }}>Agentic SOC — Live Pipeline</div>
+            <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: 0.2 }}>
+              Agentic SOC — Live Pipeline
+              <span className="soc-mono" title="Build id — confirms your browser is running the latest code" style={{ fontSize: 8, color: C.mut2, fontWeight: 400, marginLeft: 8, padding: "1px 5px", borderRadius: 4, border: `1px solid ${C.line}`, verticalAlign: "middle" }}>build {ATLAS_BUILD}</span>
+            </div>
             <div className="soc-mono" style={{ fontSize: 9, color: C.mut2 }}>{active > 0 ? `${active} agent${active !== 1 ? "s" : ""} processing` : "idle — awaiting alerts"}</div>
           </div>
         </div>

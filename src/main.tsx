@@ -2,6 +2,7 @@ import { StrictMode, Component, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App'
+import { ATLAS_BUILD } from './lib/store'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null }
@@ -29,9 +30,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-// Build marker — bump when shipping SOC pipeline fixes. Lets us confirm the
-// browser is running fresh code (check the console) vs a cached old bundle.
-export const ATLAS_BUILD = 'soc-ingest-2026-07-20-b'
+// Build marker (defined in store) — confirms the browser is running fresh code.
 console.log(`%c[ATLAS build] ${ATLAS_BUILD}`, 'color:#00e5ff;font-weight:bold')
 
 createRoot(document.getElementById('root')!).render(

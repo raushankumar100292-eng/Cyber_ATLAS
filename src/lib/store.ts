@@ -4,6 +4,10 @@ import { saveAlert, saveIncident, nextIncidentNo } from './socDb'
 
 export type ViewMode = 'globe' | 'matrix' | 'upload' | 'delta' | 'spl-kql' | 'soar' | 'architect' | 'agentic-soc' | 'alert-gen' | 'soc-triage' | 'soc-analytics' | 'soc-campaigns' | 'soc-ioc' | 'prompt-eng' | 'agent-hub'
 
+// ── Build marker — bump on each SOC change so we can confirm the browser is
+// running fresh code (shown in the SOC header + logged to console) ────────────
+export const ATLAS_BUILD = 'soc-2026-07-28-a'
+
 // ── Alert-queue capacity (shared so UI + background runner stay in sync) ───────
 export const ALERT_QUEUE_CAP = 500        // hard cap; oldest dropped beyond this
 export const QUEUE_PRUNE_THRESHOLD = 30   // auto-prune processed alerts at/above this
