@@ -101,6 +101,7 @@ export default function AcnAssistant() {
 
   const launchNow = () => { setOpen(false); stopWake(); setImmersive(true) }
   const openChat  = () => { setOpen(false); setChat(true) }
+  const closeChat = useCallback(() => setChat(false), [])
 
   return (
     <>
@@ -185,7 +186,7 @@ export default function AcnAssistant() {
       {immersive && <AcnImmersive onExit={exitImmersive} />}
 
       {/* ── Text chat mode ── */}
-      {chat && <AcnChat onClose={() => setChat(false)} />}
+      {chat && <AcnChat onClose={closeChat} />}
     </>
   )
 }

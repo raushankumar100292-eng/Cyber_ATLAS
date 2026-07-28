@@ -39,7 +39,18 @@ export default function AcnChat({ onClose }: { onClose: () => void }) {
   const scrollRef  = useRef<HTMLDivElement>(null)
   const historyRef = useRef<ChatTurn[]>([])
   const recogRef   = useRef<SRLike | null>(null)
+  const panelRef   = useRef<HTMLDivElement>(null)
   const sttSupported = typeof window !== 'undefined' && !!newRecognition()
+
+  // Click anywhere outside the panel closes it — no backdrop needed, so the
+  // rest of the SOC stays fully clickable while the chat is open.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [onClose])
 
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [msgs, thinking])
   useEffect(() => () => { try { recogRef.current?.stop() } catch { /* ignore */ } }, [])
@@ -84,7 +95,7 @@ export default function AcnChat({ onClose }: { onClose: () => void }) {
   return (
     // Right-docked panel only — no full-screen backdrop, so the SOC stays fully
     // visible and interactive while you chat with ACN.
-    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 400, maxWidth: '92vw', zIndex: 1500,
+    <div ref={panelRef} style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 400, maxWidth: '92vw', zIndex: 1500,
       background: ACN.ink, borderLeft: `1px solid ${ACN.line}`, display: 'flex', flexDirection: 'column',
       boxShadow: '-14px 0 48px rgba(0,0,0,.55)', animation: 'acnc-in .2s ease both', fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
       <style>{`@keyframes acnc-in { from{opacity:0;transform:translateX(24px)} to{opacity:1;transform:none} }
