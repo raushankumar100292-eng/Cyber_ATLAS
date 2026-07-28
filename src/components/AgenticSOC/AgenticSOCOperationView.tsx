@@ -43,6 +43,11 @@ const AGENT_CONFIG: Record<string, AgentConf> = {
   cloud:    { label: "Cloud Abuse Agent",     shortLabel: "CLD", color: "#38bdf8", icon: "☁" },
   insider:  { label: "Insider Threat Agent",  shortLabel: "INS", color: "#fb7185", icon: "👤" },
   supply:   { label: "Supply Chain Agent",    shortLabel: "SCH", color: "#e879f9", icon: "⛓" },
+  recon:       { label: "Recon Agent",           shortLabel: "RCN", color: "#22d3ee", icon: "🔍" },
+  resourcedev: { label: "Resource Dev Agent",    shortLabel: "RSD", color: "#c084fc", icon: "⚙" },
+  persistence: { label: "Persistence Agent",     shortLabel: "PST", color: "#f59e0b", icon: "⚓" },
+  defevasion:  { label: "Defense Evasion Agent", shortLabel: "EVA", color: "#94a3b8", icon: "🕶" },
+  impact:      { label: "Impact Agent",          shortLabel: "IMP", color: "#ef4444", icon: "💥" },
   unknown:  { label: "General Agent",         shortLabel: "GEN", color: "#6B7A96", icon: "◇" },
 };
 

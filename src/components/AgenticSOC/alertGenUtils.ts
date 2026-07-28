@@ -3,16 +3,21 @@ import type { AlertQueueItem } from '../../lib/store'
 export const GROQ_KEY_STORAGE = 'atlas_groq_key'
 
 export const USE_CASES = [
-  { id: 'phishing', label: 'Phishing / Email Attack',          tactic: 'Initial Access',       desc: 'Spear-phishing, BEC, malicious attachment delivery' },
-  { id: 'malware',  label: 'Endpoint Malware / Ransomware',    tactic: 'Execution',            desc: 'Ransomware drop, trojan execution, fileless malware' },
-  { id: 'lateral',  label: 'Lateral Movement',                 tactic: 'Lateral Movement',     desc: 'Pass-the-hash, RDP abuse, WMI remote execution' },
-  { id: 'exfil',    label: 'Data Exfiltration',                tactic: 'Exfiltration',         desc: 'Large data transfer, DNS tunnelling, cloud upload' },
-  { id: 'brute',    label: 'Brute Force / Credential Stuffing', tactic: 'Credential Access',  desc: 'Failed logins, password spray, account lockouts' },
-  { id: 'privesc',  label: 'Privilege Escalation',             tactic: 'Privilege Escalation', desc: 'Token impersonation, UAC bypass, sudo abuse' },
-  { id: 'c2',       label: 'C2 Communication',                 tactic: 'Command and Control',  desc: 'Beacon traffic, DNS C2, HTTPS C2 to suspicious domain' },
-  { id: 'cloud',    label: 'Cloud Resource Abuse',             tactic: 'Discovery',            desc: 'IAM enumeration, S3 bucket access, cryptomining spin-up' },
-  { id: 'insider',  label: 'Insider Threat',                   tactic: 'Collection',           desc: 'Mass file copy, after-hours access, DLP trigger' },
-  { id: 'supply',   label: 'Supply Chain Attack',              tactic: 'Initial Access',       desc: 'Compromised package, vendor MFA bypass, build-pipeline injection' },
+  { id: 'recon',       label: 'Reconnaissance / Scanning',       tactic: 'Reconnaissance',       desc: 'Port scanning, service enumeration, OSINT gathering' },
+  { id: 'resourcedev', label: 'Resource Development',            tactic: 'Resource Development', desc: 'Attacker infrastructure, domain registration, malware staging' },
+  { id: 'phishing',    label: 'Phishing / Email Attack',         tactic: 'Initial Access',       desc: 'Spear-phishing, BEC, malicious attachment delivery' },
+  { id: 'malware',     label: 'Endpoint Malware / Ransomware',   tactic: 'Execution',            desc: 'Ransomware drop, trojan execution, fileless malware' },
+  { id: 'persistence', label: 'Persistence Mechanism',           tactic: 'Persistence',          desc: 'Scheduled task, registry run key, new service, startup folder' },
+  { id: 'privesc',     label: 'Privilege Escalation',            tactic: 'Privilege Escalation', desc: 'Token impersonation, UAC bypass, sudo abuse' },
+  { id: 'defevasion',  label: 'Defense Evasion',                 tactic: 'Defense Evasion',      desc: 'Log clearing, AMSI bypass, disabling security tools, obfuscation' },
+  { id: 'brute',       label: 'Brute Force / Credential Access', tactic: 'Credential Access',    desc: 'Failed logins, password spray, account lockouts' },
+  { id: 'cloud',       label: 'Cloud Resource Abuse / Discovery', tactic: 'Discovery',           desc: 'IAM enumeration, S3 bucket access, cryptomining spin-up' },
+  { id: 'lateral',     label: 'Lateral Movement',                tactic: 'Lateral Movement',     desc: 'Pass-the-hash, RDP abuse, WMI remote execution' },
+  { id: 'insider',     label: 'Insider Threat / Collection',     tactic: 'Collection',           desc: 'Mass file copy, after-hours access, DLP trigger' },
+  { id: 'c2',          label: 'C2 Communication',                tactic: 'Command and Control',  desc: 'Beacon traffic, DNS C2, HTTPS C2 to suspicious domain' },
+  { id: 'exfil',       label: 'Data Exfiltration',               tactic: 'Exfiltration',         desc: 'Large data transfer, DNS tunnelling, cloud upload' },
+  { id: 'impact',      label: 'Impact / Data Destruction',       tactic: 'Impact',               desc: 'Ransomware encryption, data wiping, service disruption' },
+  { id: 'supply',      label: 'Supply Chain Attack',             tactic: 'Initial Access',       desc: 'Compromised package, vendor MFA bypass, build-pipeline injection' },
 ] as const
 
 export type UseCaseId = typeof USE_CASES[number]['id']
@@ -170,6 +175,46 @@ const UC_TEMPLATES: Record<string, {
     dests: ['registry.npmjs.org', 'pypi.org', 'vendor-portal.com'],
     evidence: ['Package post-install script beacons out', 'Unsigned dependency update', 'Vendor cert mismatch'],
     action: 'Quarantine artifact and audit build pipeline',
+  },
+  recon: {
+    tech: [['T1595.001', 'Scanning IP Blocks'], ['T1046', 'Network Service Discovery'], ['T1590', 'Gather Victim Network Information']],
+    titles: ['Port Scan Detected', 'Network Service Enumeration', 'External Recon Sweep'],
+    procs: ['nmap', 'masscan', '—'], ports: [22, 80, 443, 3389],
+    dests: ['dmz-subnet', 'edge-fw-01', 'SRV-WEB-03'],
+    evidence: ['SYN scan across 1,024 ports in 40s', 'Sequential host sweep of 10.0.0.0/24', 'User-agent matches known scanner'],
+    action: 'Block source IP at perimeter and review exposed services',
+  },
+  resourcedev: {
+    tech: [['T1583.001', 'Acquire Infrastructure: Domains'], ['T1587.001', 'Develop Capabilities: Malware'], ['T1608', 'Stage Capabilities']],
+    titles: ['Suspicious Domain Registration', 'Attacker Infrastructure Detected', 'Malicious Payload Staged'],
+    procs: ['—'], ports: [443, 53],
+    dests: ['secure-login-verify.top', 'c2-staging.xyz', 'paste.ee'],
+    evidence: ['Lookalike domain registered < 24h ago', 'TLS cert issued for typosquat domain', 'Payload staged on paste site'],
+    action: 'Add indicators to blocklist and monitor for activation',
+  },
+  persistence: {
+    tech: [['T1053.005', 'Scheduled Task'], ['T1547.001', 'Registry Run Keys'], ['T1543.003', 'Windows Service']],
+    titles: ['Persistence via Scheduled Task', 'Registry Run Key Added', 'Malicious Service Installed'],
+    procs: ['schtasks.exe', 'reg.exe', 'sc.exe'], ports: [445],
+    dests: ['WKS-FIN-08', 'SRV-APP-02', 'WKS-ENG-31'],
+    evidence: ['New scheduled task launches PowerShell at logon', 'Run key points to a %TEMP% binary', 'Auto-start service with unsigned binary'],
+    action: 'Remove persistence artifact and image the host',
+  },
+  defevasion: {
+    tech: [['T1070.001', 'Clear Windows Event Logs'], ['T1562.001', 'Disable or Modify Tools'], ['T1027', 'Obfuscated Files or Information']],
+    titles: ['Security Event Log Cleared', 'Endpoint Protection Disabled', 'AMSI Bypass Detected'],
+    procs: ['wevtutil.exe', 'powershell.exe', 'cmd.exe'], ports: [445],
+    dests: ['WKS-HR-14', 'SRV-DC-01', 'WKS-FIN-08'],
+    evidence: ['Security event log cleared (Event ID 1102)', 'Defender real-time protection disabled', 'Base64/XOR obfuscated command line'],
+    action: 'Isolate host, restore logging, and hunt for related activity',
+  },
+  impact: {
+    tech: [['T1486', 'Data Encrypted for Impact'], ['T1490', 'Inhibit System Recovery'], ['T1485', 'Data Destruction']],
+    titles: ['Ransomware Encryption In Progress', 'Shadow Copies Deleted', 'Mass Data Destruction Detected'],
+    procs: ['vssadmin.exe', 'powershell.exe', 'cmd.exe'], ports: [445, 3389],
+    dests: ['FILE-SRV-01', 'SRV-DC-01', 'SRV-APP-02'],
+    evidence: ['Mass file rename to .locked extension', 'vssadmin delete shadows /all executed', 'Ransom note dropped in every directory'],
+    action: 'Isolate immediately, preserve evidence, and initiate IR/recovery',
   },
 }
 

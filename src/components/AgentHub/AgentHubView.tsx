@@ -160,9 +160,10 @@ function uid() { return Math.random().toString(36).slice(2, 10) }
 // ── Map a SOC-trained agent (from the shared store) → Agent Hub card ───────────
 const SOC_CATEGORY: Record<string, AgentCategory> = {
   phishing: 'detection', malware: 'detection', brute: 'detection', c2: 'detection',
-  lateral: 'hunting', insider: 'hunting',
-  exfil: 'intelligence', cloud: 'intelligence', supply: 'intelligence',
-  privesc: 'response',
+  persistence: 'detection', defevasion: 'detection',
+  lateral: 'hunting', insider: 'hunting', recon: 'hunting',
+  exfil: 'intelligence', cloud: 'intelligence', supply: 'intelligence', resourcedev: 'intelligence',
+  privesc: 'response', impact: 'response',
 }
 function socAgentId(alertType: string) { return `soc-${alertType}` }
 

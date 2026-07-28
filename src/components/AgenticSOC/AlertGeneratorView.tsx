@@ -9,6 +9,7 @@ import {
   Zap, Play, Square, Trash2, Copy, Check, ChevronDown, ChevronRight,
   AlertTriangle, Shield, Mail, Server, Database, Key, Network, Cloud,
   Users, Activity, RefreshCw, Clock, Eye, Shuffle, Download,
+  Search, Wrench, Anchor, EyeOff, Bomb,
 } from 'lucide-react'
 
 // ── Icon / color maps ─────────────────────────────────────────────────────────
@@ -16,11 +17,13 @@ const UC_ICONS: Record<UseCaseId, React.ComponentType<{ className?: string; styl
   phishing: Mail, malware: AlertTriangle, lateral: Network,
   exfil: Database, brute: Key, privesc: Shield,
   c2: Activity, cloud: Cloud, insider: Users, supply: Server,
+  recon: Search, resourcedev: Wrench, persistence: Anchor, defevasion: EyeOff, impact: Bomb,
 }
 const UC_COLORS: Record<UseCaseId, string> = {
   phishing: '#f87171', malware: '#fb923c', lateral: '#fbbf24',
   exfil: '#a78bfa', brute: '#818cf8', privesc: '#34d399',
   c2: '#00e5ff', cloud: '#38bdf8', insider: '#fb7185', supply: '#e879f9',
+  recon: '#22d3ee', resourcedev: '#c084fc', persistence: '#f59e0b', defevasion: '#94a3b8', impact: '#ef4444',
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
