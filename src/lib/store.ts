@@ -181,6 +181,30 @@ function saveTrainedAgents(agents: TrainedAgentSkill[]) {
   try { localStorage.setItem(TRAINED_AGENTS_KEY, JSON.stringify(agents)) } catch { /* ignore quota */ }
 }
 
+// ── Cross-tab sync ──────────────────────────────────────────────────────────
+// Zustand state is per-tab (in-memory), so opening the Alert Generator and the
+// Agentic SOC in separate browser tabs would give each its own alert queue.
+// A BroadcastChannel mirrors alert-queue + resolved-incident actions to all
+// tabs so alerts generated anywhere reach the SOC wherever it's open.
+// `remoteApply` guards against re-broadcasting / duplicate DB writes when we're
+// applying a message that came from another tab.
+type SyncMsg =
+  | { type: 'pushAlert'; item: AlertQueueItem }
+  | { type: 'status'; id: string; status: AlertQueueItem['status'] }
+  | { type: 'resolved'; inc: ResolvedIncident }
+  | { type: 'dismiss'; id: string }
+  | { type: 'clearQueue' }
+  | { type: 'prune' }
+// `remoteApply` guards DB writes only (so a remote-applied item isn't written to
+// Access twice). Broadcasts are instead gated on whether state actually changed,
+// which naturally terminates echo loops (re-applying an already-applied change is
+// a no-op and re-broadcasts nothing) — and, unlike a flag, it isn't defeated by
+// the synchronous subscriber cascade that runs during a remote apply.
+let remoteApply = false
+const syncChannel: BroadcastChannel | null =
+  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('atlas-soc-sync') : null
+function broadcast(msg: SyncMsg) { try { syncChannel?.postMessage(msg) } catch { /* ignore */ } }
+
 export const useStore = create<AppState>((set, get) => ({
   clientName: '',
   industryLabel: '',
@@ -208,23 +232,56 @@ export const useStore = create<AppState>((set, get) => ({
 
   alertQueue: [],
   pushAlert: (item) => {
-    // Assign an incident number once, then persist the full alert to Access.
     const withNo = item.incidentNo ? item : { ...item, incidentNo: nextIncidentNo() }
-    saveAlert(withNo)
-    set(s => ({ alertQueue: [withNo, ...s.alertQueue].slice(0, ALERT_QUEUE_CAP) }))
+    let added = false
+    set(s => {
+      if (s.alertQueue.some(a => a.id === withNo.id)) return s
+      added = true
+      return { alertQueue: [withNo, ...s.alertQueue].slice(0, ALERT_QUEUE_CAP) }
+    })
+    if (!added) return                       // already have it → no DB write, no echo
+    if (!remoteApply) saveAlert(withNo)       // only the originating tab writes to the DB
+    broadcast({ type: 'pushAlert', item: withNo })
   },
-  updateAlertStatus: (id, status) => set(s => ({
-    alertQueue: s.alertQueue.map(a => a.id === id ? { ...a, status } : a),
-  })),
-  dismissAlert: (id) => set(s => ({ alertQueue: s.alertQueue.filter(a => a.id !== id) })),
-  clearAlertQueue: () => set({ alertQueue: [] }),
+  updateAlertStatus: (id, status) => {
+    let changed = false
+    set(s => ({ alertQueue: s.alertQueue.map(a => {
+      if (a.id === id && a.status !== status) { changed = true; return { ...a, status } }
+      return a
+    }) }))
+    if (changed) broadcast({ type: 'status', id, status })
+  },
+  dismissAlert: (id) => {
+    let removed = false
+    set(s => { const next = s.alertQueue.filter(a => a.id !== id); removed = next.length !== s.alertQueue.length; return { alertQueue: next } })
+    if (removed) broadcast({ type: 'dismiss', id })
+  },
+  clearAlertQueue: () => {
+    let had = false
+    set(s => { had = s.alertQueue.length > 0; return { alertQueue: [] } })
+    if (had) broadcast({ type: 'clearQueue' })
+  },
   // Drop already-processed alerts (anything not still 'new') to keep the queue
   // from filling up during long auto-generation runs. Pending 'new' alerts are
   // always preserved so nothing un-ingested is lost.
-  pruneProcessedAlerts: () => set(s => ({ alertQueue: s.alertQueue.filter(a => a.status === 'new') })),
+  pruneProcessedAlerts: () => {
+    let pruned = false
+    set(s => { const next = s.alertQueue.filter(a => a.status === 'new'); pruned = next.length !== s.alertQueue.length; return { alertQueue: next } })
+    if (pruned) broadcast({ type: 'prune' })
+  },
 
   resolvedIncidents: [],
-  pushResolvedIncident: (inc) => { saveIncident(inc); set(s => ({ resolvedIncidents: [inc, ...s.resolvedIncidents].slice(0, 1000) })) },
+  pushResolvedIncident: (inc) => {
+    let added = false
+    set(s => {
+      if (s.resolvedIncidents.some(r => r.procId === inc.procId)) return s
+      added = true
+      return { resolvedIncidents: [inc, ...s.resolvedIncidents].slice(0, 1000) }
+    })
+    if (!added) return
+    if (!remoteApply) saveIncident(inc)       // only the originating tab writes to the DB
+    broadcast({ type: 'resolved', inc })
+  },
   clearResolvedIncidents: () => set({ resolvedIncidents: [] }),
 
   trainedAgents: loadTrainedAgents(),
@@ -294,3 +351,25 @@ export const useStore = create<AppState>((set, get) => ({
     pendingData: null,
   }),
 }))
+
+// Apply messages from other tabs to this tab's store. Guarded by `remoteApply`
+// so these applications don't re-broadcast (no echo loops) or re-write the DB.
+if (syncChannel) {
+  syncChannel.onmessage = (e: MessageEvent<SyncMsg>) => {
+    const msg = e.data
+    remoteApply = true
+    try {
+      const st = useStore.getState()
+      switch (msg.type) {
+        case 'pushAlert':  st.pushAlert(msg.item); break
+        case 'status':     st.updateAlertStatus(msg.id, msg.status); break
+        case 'resolved':   st.pushResolvedIncident(msg.inc); break
+        case 'dismiss':    st.dismissAlert(msg.id); break
+        case 'clearQueue': st.clearAlertQueue(); break
+        case 'prune':      st.pruneProcessedAlerts(); break
+      }
+    } finally {
+      remoteApply = false
+    }
+  }
+}

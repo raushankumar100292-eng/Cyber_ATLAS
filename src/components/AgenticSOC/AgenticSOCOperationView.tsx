@@ -1254,7 +1254,13 @@ export default function AgenticSOCOperationView() {
 
   // Pull any 'new' alerts out of the store queue and ingest them. Idempotent —
   // processedIds guards against double-ingest.
+  //
+  // Cross-tab guard: the SOC component is always mounted in EVERY tab, so gate
+  // ingestion to the tab that is actually showing the SOC view. Otherwise, when
+  // the Alert Generator and SOC are in separate tabs, both tabs' hidden SOC
+  // would ingest the same broadcasted alert and double-process it.
   const ingestNewAlerts = useCallback(() => {
+    if (useStore.getState().view !== "agentic-soc") return;
     useStore.getState().alertQueue.forEach(a => {
       if (a.status === "new" && !processedIds.current.has(a.id)) {
         processedIds.current.add(a.id);
@@ -1269,7 +1275,11 @@ export default function AgenticSOCOperationView() {
   useEffect(() => {
     ingestNewAlerts(); // catch alerts already in queue on mount
     const unsub = useStore.subscribe((state, prev) => {
-      if (state.alertQueue !== prev.alertQueue) ingestNewAlerts();
+      // React to new alerts, and to this tab switching onto the SOC view
+      if (state.alertQueue !== prev.alertQueue ||
+          (state.view === "agentic-soc" && prev.view !== "agentic-soc")) {
+        ingestNewAlerts();
+      }
     });
     return () => { unsub(); };
   }, [ingestNewAlerts]);
