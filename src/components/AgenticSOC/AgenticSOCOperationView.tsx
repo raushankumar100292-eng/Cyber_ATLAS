@@ -1178,7 +1178,9 @@ export default function AgenticSOCOperationView() {
   const [metrics,      setMetrics]      = useState<Metrics>({ tp: 0, fp: 0, escalated: 0, totalMttr: 0, resolved: 0 });
   const [reduced,      setReduced]      = useState(false);
   const apiKey        = useStore(s => s.apiKey);
-  const [activeSource, setActiveSource] = useState<SourceId | null>(null);
+  // Default to the Alert Generator source so the dropdown reflects the always-on
+  // auto-ingest feed (ingestion itself is independent of this selection).
+  const [activeSource, setActiveSource] = useState<SourceId | null>("gen");
   const [regVersion,   setRegVersion]   = useState(0); // bump to re-render registry
 
   const processedIds  = useRef(new Set<string>());
@@ -1516,9 +1518,9 @@ export default function AgenticSOCOperationView() {
           {processing.length === 0 ? (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 260, textAlign: "center", gap: 10 }}>
               <div style={{ width: 44, height: 44, borderRadius: 11, background: `${C.purple}10`, border: `1px solid ${C.purple}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>◈</div>
-              <div className="soc-mono" style={{ fontSize: 11.5, color: C.mut2 }}>Master Agent idle</div>
-              <div style={{ fontSize: 10, color: C.mut2, maxWidth: 290 }}>
-                Use <span style={{ color: C.amber }}>Alert Ingestion ▾</span> above to connect a source. Once alerts arrive, Master Agent assigns specialized child agents automatically.
+              <div className="soc-mono" style={{ fontSize: 11.5, color: C.mut2 }}>Master Agent idle — auto-ingest live</div>
+              <div style={{ fontSize: 10, color: C.mut2, maxWidth: 320 }}>
+                The <span style={{ color: C.amber }}>Alert Generator</span> feed auto-ingests here — no connection needed. Open the <span style={{ color: C.amber }}>Alert Generator</span> and click <span style={{ color: C.amber }}>Generate Alert</span> (or toggle Auto); the Master Agent will assign a specialized child agent automatically. Use <span style={{ color: C.amber }}>Alert Ingestion ▾</span> only for Paste / Upload / SIEM sources.
               </div>
             </div>
           ) : (
