@@ -1184,9 +1184,9 @@ export default function AgenticSOCOperationView() {
   const [reduced,      setReduced]      = useState(false);
   const apiKey        = useStore(s => s.apiKey);
   const queueDepth    = useStore(s => s.alertQueue.length); // reactive, for the queue indicator
-  // Default to the Alert Generator source so the dropdown reflects the always-on
-  // auto-ingest feed (ingestion itself is independent of this selection).
-  const [activeSource, setActiveSource] = useState<SourceId | null>("gen");
+  // No source selected by default — the Alert Generator feed auto-ingests
+  // regardless of this dropdown, which only opens Paste / Upload / SIEM panels.
+  const [activeSource, setActiveSource] = useState<SourceId | null>(null);
   const [regVersion,   setRegVersion]   = useState(0); // bump to re-render registry
 
   const processedIds  = useRef(new Set<string>());
