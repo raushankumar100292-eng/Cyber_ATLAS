@@ -39,7 +39,9 @@ const PHASE_LABEL: Record<Phase, string> = {
 }
 
 export default function AcnImmersive({ onExit }: { onExit: () => void }) {
-  const geminiKey = useStore(s => s.geminiKey)
+  const geminiKey    = useStore(s => s.geminiKey)
+  const setGeminiKey = useStore(s => s.setGeminiKey)
+  const [keyDraft, setKeyDraft] = useState('')
 
   const [phase,      setPhase]      = useState<Phase>('idle')
   const [caption,    setCaption]    = useState('')          // what the user said
@@ -165,13 +167,18 @@ export default function AcnImmersive({ onExit }: { onExit: () => void }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geminiKey, speak])
 
+  // Errors that mean the mic will never work this session — retrying immediately
+  // would spin forever (start() -> instant error -> onend -> restart -> ...).
+  const isHardMicError = (err: string) => err === 'not-allowed' || err === 'audio-capture' || err === 'service-not-allowed'
+
   // ── Listen (STT) ─────────────────────────────────────────────────────────────
   const listen = useCallback(() => {
     if (!mountedRef.current || busyRef.current) return
     const recog = newRecognition()
-    if (!recog) { setError('Voice input needs Chrome or Edge.'); return }
+    if (!recog) { setError('Voice input needs Chrome or Edge.'); setPhaseSafe('idle'); return }
     recog.lang = 'en-US'; recog.continuous = false; recog.interimResults = true
     let finalText = ''
+    let hadHardError = false
     recog.onresult = (e) => {
       let itr = ''
       for (let i = 0; i < e.results.length; i++) {
@@ -180,20 +187,35 @@ export default function AcnImmersive({ onExit }: { onExit: () => void }) {
       }
       setInterim(itr)
     }
-    recog.onerror = (e) => { if (e.error !== 'no-speech' && e.error !== 'aborted') setError(`Voice: ${e.error}`) }
+    recog.onerror = (e) => {
+      if (isHardMicError(e.error)) hadHardError = true
+      else if (e.error !== 'no-speech' && e.error !== 'aborted') setError(`Voice: ${e.error}`)
+    }
     recog.onend = () => {
       setInterim('')
       if (!mountedRef.current) return
       const said = finalText.trim()
       // Voice exit
       if (/tik tik off|exit immersive|close acn|stand down/i.test(said)) { onExit(); return }
-      if (said) runTurn(said)
-      else if (phaseRef.current === 'listening') listen() // keep the mic open on silence
+      if (said) { runTurn(said); return }
+      if (hadHardError) {
+        // Stop auto-restarting; surface a clear, spoken explanation and let the
+        // user retry manually (tap the orb) once they've fixed permissions.
+        setError('Microphone access is blocked. Allow it in the browser, then tap ACN to try again.')
+        setPhaseSafe('idle')
+        return
+      }
+      if (phaseRef.current === 'listening') listen() // keep the mic open on silence
     }
     recogRef.current = recog
     setPhaseSafe('listening')
     try { recog.start() } catch { /* already started */ }
   }, [runTurn, onExit])
+
+  // Manual retry — tap the orb after fixing mic permissions (or just to nudge it).
+  const retryListening = useCallback(() => {
+    if (phase === 'idle' && !busyRef.current) { setError(''); listen() }
+  }, [phase, listen])
 
   // ── Boot: greet, then start listening ──────────────────────────────────────────
   useEffect(() => {
@@ -292,8 +314,10 @@ export default function AcnImmersive({ onExit }: { onExit: () => void }) {
         )
       })}
 
-      {/* central ACN orb */}
-      <div style={{ position: 'absolute', left: geo.cx, top: geo.cy, transform: 'translate(-50%,-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      {/* central ACN orb — tappable to (re)start listening when idle */}
+      <div onClick={phase === 'idle' ? retryListening : undefined}
+        title={phase === 'idle' ? 'Tap to start listening' : undefined}
+        style={{ position: 'absolute', left: geo.cx, top: geo.cy, transform: 'translate(-50%,-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: phase === 'idle' ? 'pointer' : 'default' }}>
         <div style={{ position: 'relative', width: 150, height: 150, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {/* rotating rings — per-side border colors (no shorthand/longhand mix) */}
           <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', borderWidth: 2, borderStyle: 'solid', borderTopColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: orbColor, borderLeftColor: orbColor, animation: 'acnI-spin 3.5s linear infinite', opacity: 0.8 }} />
@@ -336,7 +360,20 @@ export default function AcnImmersive({ onExit }: { onExit: () => void }) {
           </div>
         )}
         {error && <div style={{ fontSize: 11, color: '#ff6b6b' }}>{error}</div>}
-        <div style={{ fontSize: 10, color: ACN.mut, marginTop: 4 }}>Speak naturally · say <b style={{ color: ACN.purpleHi }}>“tik tik off”</b> to exit</div>
+
+        {/* Self-sufficient key entry — this may be the only ACN surface open
+            (a standalone tab), so it must not depend on the launcher popover. */}
+        {!geminiKey.trim() ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input value={keyDraft} onChange={e => setKeyDraft(e.target.value)} type="password" placeholder="Gemini key — AIza…"
+              onKeyDown={e => { if (e.key === 'Enter' && keyDraft.trim()) { setGeminiKey(keyDraft.trim()); setKeyDraft(''); setError(''); listen() } }}
+              style={{ width: 220, height: 32, background: 'rgba(255,255,255,0.06)', border: `1px solid ${ACN.purple}55`, borderRadius: 8, padding: '0 10px', color: ACN.text, fontSize: 11.5, outline: 'none' }} />
+            <button onClick={() => { if (keyDraft.trim()) { setGeminiKey(keyDraft.trim()); setKeyDraft(''); setError(''); listen() } }}
+              style={{ height: 32, padding: '0 14px', borderRadius: 8, border: 'none', background: ACN.purple, color: '#fff', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>Activate</button>
+          </div>
+        ) : (
+          <div style={{ fontSize: 10, color: ACN.mut, marginTop: 4 }}>Speak naturally · say <b style={{ color: ACN.purpleHi }}>“tik tik off”</b> to exit</div>
+        )}
       </div>
     </div>
   )

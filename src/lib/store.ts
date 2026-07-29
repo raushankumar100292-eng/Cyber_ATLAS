@@ -195,6 +195,11 @@ type SyncMsg =
   | { type: 'dismiss'; id: string }
   | { type: 'clearQueue' }
   | { type: 'prune' }
+  // A newly-opened tab (e.g. the ACN Immersive tab) starts with empty in-memory
+  // state, so it asks existing tabs for a snapshot of the live queue/history —
+  // this is what lets ACN reason about alerts generated before it was opened.
+  | { type: 'requestSnapshot' }
+  | { type: 'snapshot'; alertQueue: AlertQueueItem[]; resolvedIncidents: ResolvedIncident[] }
 // `remoteApply` guards DB writes only (so a remote-applied item isn't written to
 // Access twice). Broadcasts are instead gated on whether state actually changed,
 // which naturally terminates echo loops (re-applying an already-applied change is
@@ -357,6 +362,31 @@ export const useStore = create<AppState>((set, get) => ({
 if (syncChannel) {
   syncChannel.onmessage = (e: MessageEvent<SyncMsg>) => {
     const msg = e.data
+    if (msg.type === 'requestSnapshot') {
+      // Reply directly (not via broadcast()) — this is a response, not a
+      // state change, so it must never be gated by remoteApply.
+      const st = useStore.getState()
+      if (st.alertQueue.length || st.resolvedIncidents.length) {
+        try { syncChannel.postMessage({ type: 'snapshot', alertQueue: st.alertQueue, resolvedIncidents: st.resolvedIncidents } satisfies SyncMsg) } catch { /* ignore */ }
+      }
+      return
+    }
+    if (msg.type === 'snapshot') {
+      // Merge in whatever we don't already have. No DB writes (already
+      // persisted by the tab that originated them) and no re-broadcast.
+      useStore.setState(s => {
+        const haveAlerts = new Set(s.alertQueue.map(a => a.id))
+        const newAlerts  = msg.alertQueue.filter(a => !haveAlerts.has(a.id))
+        const haveInc    = new Set(s.resolvedIncidents.map(r => r.procId))
+        const newInc     = msg.resolvedIncidents.filter(r => !haveInc.has(r.procId))
+        if (!newAlerts.length && !newInc.length) return s
+        return {
+          alertQueue:        [...s.alertQueue, ...newAlerts].slice(0, ALERT_QUEUE_CAP),
+          resolvedIncidents: [...s.resolvedIncidents, ...newInc].slice(0, 1000),
+        }
+      })
+      return
+    }
     remoteApply = true
     try {
       const st = useStore.getState()
@@ -372,4 +402,7 @@ if (syncChannel) {
       remoteApply = false
     }
   }
+  // Ask any already-open tabs for their current state as soon as we boot, so a
+  // freshly-opened tab (e.g. the ACN Immersive tab) has full context immediately.
+  try { syncChannel.postMessage({ type: 'requestSnapshot' } satisfies SyncMsg) } catch { /* ignore */ }
 }

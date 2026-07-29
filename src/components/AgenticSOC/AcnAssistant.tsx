@@ -46,6 +46,17 @@ export default function AcnAssistant() {
   useEffect(() => { armedRef.current = armed }, [armed])
   useEffect(() => { immersRef.current = immersive }, [immersive])
 
+  // Immersive mode opens in its own browser tab (AcnImmersiveTab, routed via
+  // ?acn=immersive in main.tsx) so it's a true full-screen experience separate
+  // from the SOC dashboard. Falls back to the in-page overlay if the browser
+  // blocks the popup (e.g. a voice-triggered launch without a fresh user gesture).
+  const openImmersiveTab = useCallback(() => {
+    const url = `${window.location.origin}${window.location.pathname}?acn=immersive`
+    let win: Window | null = null
+    try { win = window.open(url, '_blank', 'noopener') } catch { win = null }
+    if (!win) setImmersive(true) // popup blocked — fall back to overlay
+  }, [])
+
   // close popover on outside click
   useEffect(() => {
     if (!open) return
@@ -71,7 +82,7 @@ export default function AcnAssistant() {
       if (WAKE.test(txt)) {
         setHeard(''); setOpen(false)
         stopWake()
-        setImmersive(true)
+        openImmersiveTab()
       }
     }
     recog.onerror = () => { /* keep armed; onend will restart */ }
@@ -81,7 +92,7 @@ export default function AcnAssistant() {
     }
     wakeRef.current = recog
     try { recog.start() } catch { /* ignore */ }
-  }, [stopWake])
+  }, [stopWake, openImmersiveTab])
 
   const toggleArm = useCallback(() => {
     setArmed(a => {
@@ -99,7 +110,7 @@ export default function AcnAssistant() {
     if (armedRef.current) setTimeout(startWake, 400)
   }, [startWake])
 
-  const launchNow = () => { setOpen(false); stopWake(); setImmersive(true) }
+  const launchNow = () => { setOpen(false); stopWake(); openImmersiveTab() }
   const openChat  = () => { setOpen(false); setChat(true) }
   const closeChat = useCallback(() => setChat(false), [])
 
@@ -148,12 +159,12 @@ export default function AcnAssistant() {
             </div>
 
             <p style={{ fontSize: 11, color: ACN.mut, lineHeight: 1.5, margin: '0 0 12px' }}>
-              Say <b style={{ color: ACN.purpleHi }}>“Tik Tik ON”</b> to launch the immersive voice experience — or launch it directly below.
+              Say <b style={{ color: ACN.purpleHi }}>“Tik Tik ON”</b> to launch the immersive voice experience in a new tab — or launch it directly below.
             </p>
 
             <button onClick={launchNow}
-              style={{ width: '100%', height: 38, borderRadius: 9, border: 'none', background: `linear-gradient(90deg, ${ACN.purple}, ${ACN.purpleHi})`, color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 8 }}>
-              ▶ Launch Immersive Mode
+              style={{ width: '100%', height: 38, borderRadius: 9, border: 'none', background: `linear-gradient(90deg, ${ACN.purple}, ${ACN.purpleHi})`, color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              ▶ Launch Immersive Mode <span style={{ fontSize: 10, opacity: 0.85 }}>⧉ new tab</span>
             </button>
 
             <button onClick={openChat}

@@ -2,6 +2,7 @@ import { StrictMode, Component, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App'
+import AcnImmersiveTab from './AcnImmersiveTab'
 import { ATLAS_BUILD } from './lib/store'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -33,10 +34,14 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 // Build marker (defined in store) — confirms the browser is running fresh code.
 console.log(`%c[ATLAS build] ${ATLAS_BUILD}`, 'color:#00e5ff;font-weight:bold')
 
+// A tab opened via "Launch Immersive Mode" / "Tik Tik ON" carries ?acn=immersive
+// so it renders only the immersive experience instead of the full dashboard.
+const isImmersiveTab = new URLSearchParams(window.location.search).get('acn') === 'immersive'
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      {isImmersiveTab ? <AcnImmersiveTab /> : <App />}
     </ErrorBoundary>
   </StrictMode>
 )
