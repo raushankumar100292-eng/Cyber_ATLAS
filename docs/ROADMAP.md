@@ -237,6 +237,38 @@ distilled sanitized case.
 **Lands in:** Phase 1 (redaction + local-enrichment service + ephemeral map), Phase 3 (real
 reputation/asset lookups), Phase 4 (local ML scoring/clustering that enriches before the LLM).
 
+### Sub-component — External reputation (VirusTotal / AbuseIPDB) privacy controls
+Reputation lookup is **external by nature** (the indicator must be sent to VT/AbuseIPDB), but
+it is far lower risk than sending the full alert to an LLM: only the **indicator** leaves
+(an IP/hash/domain), never the raw alert, usernames, logs, or client context — and malicious
+external indicators are usually adversary-owned, not client PII. Acceptable, but only under
+these controls:
+
+- **External-indicators-only filter.** Never send **internal IPs** (RFC1918 `10/172.16-31/
+  192.168`), internal hostnames, usernames, or emails — they leak topology and VT/AbuseIPDB
+  have no data on them anyway. Internal identifiers go to the tokenizer, not the lookup.
+- **Hash-only for VirusTotal — never upload the file** (a file can contain sensitive data;
+  uploading it *is* the leak). Files only with explicit sanction.
+- **Cache aggressively.** Check each indicator once, reuse the result — a cache hit means the
+  IOC is **not re-sent** (privacy + rate-limit + cost).
+- **Backend proxy only.** The call goes through the server-side proxy (holds the API key,
+  applies the filter, caches). The LLM never calls VT/AbuseIPDB and never sees the raw IOC —
+  it receives the **derived verdict** (`<IP_1> — AbuseIPDB 92%, VT 47/72`).
+
+Privacy spectrum (choose per client sensitivity):
+- **Basic:** VT/AbuseIPDB via proxy, cached, external-only. — indicators only.
+- **Better:** **VT Enterprise / private API** (no public submission) + signed DPA. — no public exposure.
+- **Best (max privacy):** **local/passive threat-intel** — self-hosted **MISP**, downloaded
+  reputation feeds, on-prem **GreyNoise** → match **offline**, **zero external per-IOC calls**.
+
+*Counter-intelligence note:* even sending an indicator has a subtle risk — an adversary
+monitoring VirusTotal can see their infrastructure being queried and know they've been
+spotted. High-security clients therefore prefer the local/passive-feed tier so no indicator
+ever leaves.
+
+**Lands in:** Phase 3 (IOC enrichment proxy with the external-only filter, hash-only rule,
+cache, and optional local-feed mode).
+
 ---
 
 ## Notes on scope discipline
