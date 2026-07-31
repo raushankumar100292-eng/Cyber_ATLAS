@@ -161,6 +161,84 @@ Evolution mapped to the phases:
 
 ---
 
+## Cross-cutting track — Data Privacy & Governance
+
+**Biggest unaddressed risk today.** When agents "work on" an alert, they send its full
+content to a third-party LLM (Groq/Gemini). Alerts contain PII (users/emails), network
+detail (internal IPs/hostnames), and raw logs that may hold credentials, tokens, PHI, or
+cardholder data. Today that data leaves the environment with **no redaction, browser-held
+keys, no tenant isolation, no residency control, and no audit** — safe only because the
+demo uses **synthetic** alerts (a genuine privacy advantage of the Alert Generator). The
+moment real client alerts flow in, this is not production-safe.
+
+**Regulatory stakes:** GDPR (PII, residency, processor agreements), HIPAA (PHI), PCI-DSS
+(cardholder data), client confidentiality/NDA, and **cross-tenant leakage** (Client A's
+data must never appear in Client B's context).
+
+**Principle:** *Sanitize at the boundary, isolate per tenant, prefer private/zero-retention
+models, and audit everything. The LLM sees the shape of the threat, not the client's raw
+secrets.*
+
+Controls, mapped to phases:
+- **Phase 1 (non-negotiable foundation):** keys server-side + secrets vault; encryption in
+  transit/at rest; the redaction/tokenization layer (below); strict per-tenant isolation
+  (no cross-tenant data in one context).
+- **Phase 3:** DPA with any LLM provider; data-residency pinning per client; retention &
+  deletion / right-to-erasure.
+- **Phase 6:** compliance (SOC 2, HIPAA/PCI as needed), pen-test, audit review.
+- **`v0.2` interim:** keep using **synthetic alerts** — no real privacy exposure while data is fake.
+
+### Component — Local Enrichment & Tokenization Layer *(privacy + accuracy cornerstone)*
+Enrich and sanitize each alert **locally, inside the trust boundary, before** any LLM sees
+it; then **de-tokenize** the LLM's output and route real values to SOAR/ITSM/DB. This is the
+concrete implementation of the privacy principle **and** it makes the agents *more* accurate.
+
+```
+Raw alert
+   ─────────────── LOCAL (inside boundary) ───────────────
+   1. Parse & normalize                                  (scripting)
+   2. ENRICH locally: GeoIP, asset criticality, internal (local ML + lookups)
+      threat-intel, UEBA/anomaly score, cached reputation,
+      dedup/cluster, TP/FP pre-score
+   3. REDACT & TOKENIZE: user@corp.com → <USER_1>,        (scripting + PII/NER model)
+      10.2.3.4 → <IP_1>, host → <HOST_1>
+      → token↔real MAP kept LOCAL (never sent out)
+   ────────────────────────────────────────────────────────
+        │  send SANITIZED + enriched context only
+        ▼
+   LLM agents reason on structure + local intel (not raw identities)
+        │  returns decision/analysis (references <IP_1>, <USER_1>…)
+        ▼
+   ─────────────── LOCAL ───────────────
+   4. RE-MAP tokens → real values          (de-tokenize via local map)
+   5. Route to SOAR / ITSM / DB with REAL, actionable values
+```
+
+**Local ML + scripting does:** PII/entity detection for redaction (e.g. Presidio),
+anomaly/UEBA scoring, TP/FP classification, dedup/clustering, local embeddings for
+similarity/RAG over past incidents, and local lookups (GeoIP, asset inventory, cached
+reputation, blocklists).
+
+**Dual win:** (a) **privacy** — raw identities/secrets never leave; (b) **accuracy** — the
+LLM gets real local ground-truth (reputation, criticality, anomaly score) instead of
+guessing; (c) **cost/latency** — local ML does the bulk cheaply, LLM only reasons on the
+distilled sanitized case.
+
+**Caveats (for it to actually be safe):**
+1. **Robust redaction** — a missed field leaks; use a proven library + allow-lists, and add
+   **defense-in-depth** with an **on-prem/private LLM** for the most sensitive clients.
+2. **Consistent-but-scoped tokenization** — same value → same token *within* a case (so the
+   LLM can correlate), but **unique per case/tenant** (no leakage across incidents/clients).
+3. **Derive facts before redacting** — some analysis needs the real value ("is this IP
+   internal?"); compute it locally first and pass the *derived fact*, not the raw value.
+4. **The token map is sensitive** — keep it local/vaulted and ephemeral; never persist with
+   the LLM transcript.
+
+**Lands in:** Phase 1 (redaction + local-enrichment service + ephemeral map), Phase 3 (real
+reputation/asset lookups), Phase 4 (local ML scoring/clustering that enriches before the LLM).
+
+---
+
 ## Notes on scope discipline
 - SOAR's rule-based dedup/correlation already collapses known, high-volume alerts — keep deterministic playbooks for the predictable majority. Dynamic synthesis / ML triage target the **long-tail, context-dependent, correlated, and new-detection** cases fixed rules can't pre-cover.
 - ITSM (ServiceNow/Jira) is the **incident system of record** in production; ATLAS orchestrates and transitions the ticket, syncing bidirectionally.
