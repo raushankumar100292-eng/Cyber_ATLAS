@@ -1167,6 +1167,8 @@ function buildResolved(a: ProcessingAgent, ins: InsightAnalysis, mttr: number): 
     attackChain:        ins.attackChain,
     recommendations:    ins.recommendations,
     threatActorProfile: ins.threatActorProfile,
+    reasoning:          ins.reasoning,
+    sampleQueries:      ins.sampleQueries ?? { splunk: [], kql: [] },
   };
 }
 

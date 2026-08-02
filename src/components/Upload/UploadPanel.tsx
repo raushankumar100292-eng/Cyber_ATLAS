@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { parseUseCaseExcel, parseExcel, parseJson, analyzeUseCases } from '../../lib/coverage'
 import { analyzeWithGroq } from '../../lib/groq'
 import { useStore } from '../../lib/store'
+import { getIndustryProfile, computeIndustryGaps } from '../../data/industryKB'
 import type { CoverageDataset, UseCaseEntry, UseCaseAnalysis } from '../../lib/types'
 
 const INDUSTRIES = [
@@ -89,6 +90,74 @@ function renderInline(text: string): string {
   return text
     .replace(/\*\*(.+?)\*\*/g, '<strong class="text-slate-200 font-semibold">$1</strong>')
     .replace(/`(.+?)`/g, '<code class="font-mono text-[11px] text-cyan-400 bg-cyan-500/10 px-1 rounded">$1</code>')
+}
+
+// Industry Threat Profile card — surfaces the matched Knowledge Base entry so the
+// analyst sees the sector baseline (threat actors, expected techniques, coverage
+// vs. baseline) before running analysis.
+function IndustryProfileCard({ industryKey, coverage }: { industryKey: string; coverage: CoverageDataset }) {
+  const profile = getIndustryProfile(industryKey)
+  if (!profile) return null
+  const gap = computeIndustryGaps(profile, coverage.entries.map(e => e.techniqueId))
+  const pctColor = gap.coveragePct >= 70 ? '#4ade80' : gap.coveragePct >= 40 ? '#fbbf24' : '#f87171'
+
+  return (
+    <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-white/[0.06] flex items-center gap-2">
+        <Building2 className="w-3.5 h-3.5 text-indigo-400" />
+        <span className="text-xs font-semibold text-slate-200">Industry Threat Profile</span>
+        <span className="text-[10px] text-slate-600 ml-1">· {profile.label}</span>
+        <div className="ml-auto flex items-center gap-1.5" title="Share of this industry's baseline techniques your coverage addresses">
+          <span className="text-[10px] text-slate-500 uppercase tracking-wider">Baseline</span>
+          <span className="text-sm font-bold font-mono" style={{ color: pctColor }}>{gap.coveragePct}%</span>
+        </div>
+      </div>
+
+      <div className="px-4 py-3 space-y-3">
+        <p className="text-[11px] text-slate-400 leading-relaxed">{profile.threatProfile}</p>
+
+        {/* Threat actors */}
+        <div>
+          <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1.5">Top threat actors</div>
+          <div className="flex flex-wrap gap-1.5">
+            {profile.topThreatActors.map(a => (
+              <span key={a} className="text-[10px] px-2 py-0.5 rounded font-mono text-rose-300 bg-rose-500/10 border border-rose-500/20">{a}</span>
+            ))}
+          </div>
+        </div>
+
+        {/* Missing baseline techniques */}
+        {gap.missing.length > 0 && (
+          <div>
+            <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1.5">
+              Missing sector-baseline techniques <span className="text-amber-400/80">({gap.missing.length})</span>
+            </div>
+            <div className="space-y-1">
+              {gap.missing.map(t => (
+                <div key={t.id} className="flex items-start gap-2">
+                  <span className="text-[10px] font-mono text-amber-400 mt-px shrink-0">{t.id}</span>
+                  <span className="text-[10px] text-slate-400 leading-snug">{t.name} <span className="text-slate-600">· {t.tactic}</span></span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {gap.missing.length === 0 && (
+          <div className="text-[10px] text-green-400/90">✓ Coverage addresses the full sector baseline.</div>
+        )}
+
+        {/* Expected log sources */}
+        <div>
+          <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1.5">Expected log sources</div>
+          <div className="flex flex-wrap gap-1.5">
+            {profile.logSources.map(s => (
+              <span key={s} className="text-[10px] px-2 py-0.5 rounded text-slate-400 bg-white/[0.03] border border-white/[0.06]">{s}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function UploadPanel() {
@@ -187,6 +256,7 @@ export default function UploadPanel() {
       setClientInfo(
         clientName.trim(),
         INDUSTRIES.find(i => i.value === industryType)?.label ?? industryType,
+        industryType,
       )
       setUploadStep('ready')
     } catch (err) {
@@ -236,6 +306,7 @@ export default function UploadPanel() {
               setGroqStatus('error')
             },
           },
+          getIndustryProfile(industryType),
         )
       }
     } catch (err) {
@@ -542,6 +613,9 @@ export default function UploadPanel() {
                       ))}
                     </div>
                   </div>
+
+                  {/* Industry threat profile (from the Knowledge Base) */}
+                  <IndustryProfileCard industryKey={industryType} coverage={submitResult.coverage} />
 
                   <button onClick={handleAnalyze}
                     className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all"

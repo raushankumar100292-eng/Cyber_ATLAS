@@ -1,6 +1,8 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useStore } from './lib/store'
+import { INDUSTRY_KB } from './data/industryKB'
+import { seedIndustryBaselines } from './lib/socDb'
 import TopBar from './components/HUD/TopBar'
 import GlobeScene from './components/Globe/GlobeScene'
 import MatrixView from './components/Matrix/MatrixView'
@@ -20,6 +22,8 @@ import AgenticSOCOperationView from './components/AgenticSOC/AgenticSOCOperation
 import SocAnalyticsView from './components/AgenticSOC/SocAnalyticsView'
 import CampaignDetectionView from './components/AgenticSOC/CampaignDetectionView'
 import IocWatchlistView from './components/AgenticSOC/IocWatchlistView'
+import CaseReviewView from './components/AgenticSOC/CaseReviewView'
+import GapReportView from './components/Assessment/GapReportView'
 import PromptEngineeringView from './components/PromptEngineering/PromptEngineeringView'
 import AgentHubView from './components/AgentHub/AgentHubView'
 
@@ -32,8 +36,13 @@ export default function App() {
   const selectedTacticId   = useStore(s => s.selectedTacticId)
   const selectedTechniqueId = useStore(s => s.selectedTechniqueId)
 
+  // Mirror the curated Industry KB into the DB once on startup (no-op if the
+  // local DB service isn't running). Makes the sector baseline queryable as data.
+  useEffect(() => { seedIndustryBaselines(Object.values(INDUSTRY_KB)) }, [])
+
   const isUploadView      = view === 'upload'
   const isDeltaView       = view === 'delta'
+  const isGapReportView   = view === 'gap-report'
   const isSplKqlView      = view === 'spl-kql'
   const isSoarView        = view === 'soar'
   const isArchitectView   = view === 'architect'
@@ -43,9 +52,10 @@ export default function App() {
   const isSocAnalyticsView  = view === 'soc-analytics'
   const isCampaignsView     = view === 'soc-campaigns'
   const isIocView           = view === 'soc-ioc'
+  const isCasesView         = view === 'soc-cases'
   const isPromptEngView     = view === 'prompt-eng'
   const isAgentHubView      = view === 'agent-hub'
-  const isFullPageView    = isUploadView || isDeltaView || isSplKqlView || isSoarView || isArchitectView || isAgenticSOCView || isAlertGenView || isSocTriageView || isSocAnalyticsView || isCampaignsView || isIocView || isPromptEngView || isAgentHubView
+  const isFullPageView    = isUploadView || isDeltaView || isGapReportView || isSplKqlView || isSoarView || isArchitectView || isAgenticSOCView || isAlertGenView || isSocTriageView || isSocAnalyticsView || isCampaignsView || isIocView || isCasesView || isPromptEngView || isAgentHubView
 
   const hasDetail    = (selectedTacticId !== null || selectedTechniqueId !== null) && view !== 'globe'
   const hasCoverage  = coverage !== null
@@ -189,6 +199,14 @@ export default function App() {
               </motion.div>
             )}
 
+            {isGapReportView && (
+              <motion.div key="gap-report" style={{ width: '100%', height: '100%' }}
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}>
+                <GapReportView />
+              </motion.div>
+            )}
+
             {isSplKqlView && (
               <motion.div key="spl-kql" style={{ width: '100%', height: '100%' }}
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -250,6 +268,14 @@ export default function App() {
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 transition={{ duration: 0.2 }}>
                 <IocWatchlistView />
+              </motion.div>
+            )}
+
+            {isCasesView && (
+              <motion.div key="soc-cases" style={{ width: '100%', height: '100%' }}
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}>
+                <CaseReviewView />
               </motion.div>
             )}
 

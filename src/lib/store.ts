@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { Role, CoverageDataset, CoverageEntry, UseCaseEntry, UseCaseAnalysis } from './types'
 import { saveAlert, saveIncident, nextIncidentNo } from './socDb'
 
-export type ViewMode = 'globe' | 'matrix' | 'upload' | 'delta' | 'spl-kql' | 'soar' | 'architect' | 'agentic-soc' | 'alert-gen' | 'soc-triage' | 'soc-analytics' | 'soc-campaigns' | 'soc-ioc' | 'prompt-eng' | 'agent-hub'
+export type ViewMode = 'globe' | 'matrix' | 'upload' | 'delta' | 'gap-report' | 'spl-kql' | 'soar' | 'architect' | 'agentic-soc' | 'alert-gen' | 'soc-triage' | 'soc-analytics' | 'soc-campaigns' | 'soc-ioc' | 'soc-cases' | 'prompt-eng' | 'agent-hub'
 
 // ── Build marker — bump on each SOC change so we can confirm the browser is
 // running fresh code (shown in the SOC header + logged to console) ────────────
@@ -54,6 +54,11 @@ export interface ResolvedIncident {
   attackChain:        string[]
   recommendations:    string[]
   threatActorProfile: string
+  // Full investigation record — persisted so the Case Review view can reopen the
+  // complete case file. Optional for back-compat with incidents saved before this
+  // field existed (older localStorage / Access-DB rows).
+  reasoning?:         string
+  sampleQueries?:     { splunk: string[]; kql: string[] }
 }
 
 // Skills learned by a specialized SOC agent — mirrored into the Agent Hub.
@@ -84,6 +89,7 @@ interface AppState {
   // client context (set after upload analysis)
   clientName: string
   industryLabel: string
+  industryKey: string   // KB key (e.g. 'financial') — drives industry-aware analysis
 
   // selection / drill-down
   selectedTacticId: string | null
@@ -115,7 +121,7 @@ interface AppState {
   pendingData: { coverage: CoverageDataset; useCases: UseCaseEntry[] } | null
 
   // actions
-  setClientInfo: (name: string, industryLabel: string) => void
+  setClientInfo: (name: string, industryLabel: string, industryKey?: string) => void
   selectTactic: (id: string | null) => void
   selectTechnique: (id: string | null) => void
   hoverTactic: (id: string | null) => void
@@ -150,11 +156,13 @@ interface AppState {
   autoGenInterval: number     // seconds
   autoGenUseCase: string
   autoGenRotate: boolean      // cycle through all use cases randomly on each tick
+  autoGenIndustryMode: boolean // draw alerts from the client's industry baseline
   autoGenLastFiredAt: number  // Date.now() of last successful generation
   setAutoGenMode: (v: boolean) => void
   setAutoGenInterval: (v: number) => void
   setAutoGenUseCase: (v: string) => void
   setAutoGenRotate: (v: boolean) => void
+  setAutoGenIndustryMode: (v: boolean) => void
   setAutoGenLastFiredAt: (v: number) => void
 
   // upload workflow actions
@@ -179,6 +187,20 @@ function loadTrainedAgents(): TrainedAgentSkill[] {
 }
 function saveTrainedAgents(agents: TrainedAgentSkill[]) {
   try { localStorage.setItem(TRAINED_AGENTS_KEY, JSON.stringify(agents)) } catch { /* ignore quota */ }
+}
+
+// Resolved-incident history is persisted to localStorage so the Case Review view
+// can reopen past investigations after a reload. (Access-DB persistence via
+// saveIncident stays as-is; this is the always-on browser copy the UI reads.)
+const RESOLVED_KEY = 'atlas_resolved_incidents'
+function loadResolvedIncidents(): ResolvedIncident[] {
+  try {
+    const raw = localStorage.getItem(RESOLVED_KEY)
+    return raw ? (JSON.parse(raw) as ResolvedIncident[]) : []
+  } catch { return [] }
+}
+function saveResolvedIncidents(incidents: ResolvedIncident[]) {
+  try { localStorage.setItem(RESOLVED_KEY, JSON.stringify(incidents)) } catch { /* ignore quota */ }
 }
 
 // ── Cross-tab sync ──────────────────────────────────────────────────────────
@@ -213,6 +235,7 @@ function broadcast(msg: SyncMsg) { try { syncChannel?.postMessage(msg) } catch {
 export const useStore = create<AppState>((set, get) => ({
   clientName: '',
   industryLabel: '',
+  industryKey: '',
 
   selectedTacticId: null,
   selectedTechniqueId: null,
@@ -275,19 +298,21 @@ export const useStore = create<AppState>((set, get) => ({
     if (pruned) broadcast({ type: 'prune' })
   },
 
-  resolvedIncidents: [],
+  resolvedIncidents: loadResolvedIncidents(),
   pushResolvedIncident: (inc) => {
     let added = false
     set(s => {
       if (s.resolvedIncidents.some(r => r.procId === inc.procId)) return s
       added = true
-      return { resolvedIncidents: [inc, ...s.resolvedIncidents].slice(0, 1000) }
+      const next = [inc, ...s.resolvedIncidents].slice(0, 1000)
+      saveResolvedIncidents(next)             // survive reloads for the Case Review view
+      return { resolvedIncidents: next }
     })
     if (!added) return
     if (!remoteApply) saveIncident(inc)       // only the originating tab writes to the DB
     broadcast({ type: 'resolved', inc })
   },
-  clearResolvedIncidents: () => set({ resolvedIncidents: [] }),
+  clearResolvedIncidents: () => { saveResolvedIncidents([]); set({ resolvedIncidents: [] }) },
 
   trainedAgents: loadTrainedAgents(),
   syncTrainedAgent: (agent) => set(s => {
@@ -304,14 +329,16 @@ export const useStore = create<AppState>((set, get) => ({
   autoGenInterval: 60,
   autoGenUseCase: 'phishing',
   autoGenRotate: false,
+  autoGenIndustryMode: false,
   autoGenLastFiredAt: 0,
   setAutoGenMode: (v) => set({ autoGenMode: v }),
   setAutoGenInterval: (v) => set({ autoGenInterval: v }),
   setAutoGenUseCase: (v) => set({ autoGenUseCase: v }),
   setAutoGenRotate: (v) => set({ autoGenRotate: v }),
+  setAutoGenIndustryMode: (v) => set({ autoGenIndustryMode: v }),
   setAutoGenLastFiredAt: (v) => set({ autoGenLastFiredAt: v }),
 
-  setClientInfo: (name, industryLabel) => set({ clientName: name, industryLabel }),
+  setClientInfo: (name, industryLabel, industryKey = '') => set({ clientName: name, industryLabel, industryKey }),
   selectTactic: (id) => set({ selectedTacticId: id, selectedTechniqueId: null }),
   selectTechnique: (id) => set({ selectedTechniqueId: id }),
   hoverTactic: (id) => set({ hoveredTacticId: id }),
@@ -380,9 +407,11 @@ if (syncChannel) {
         const haveInc    = new Set(s.resolvedIncidents.map(r => r.procId))
         const newInc     = msg.resolvedIncidents.filter(r => !haveInc.has(r.procId))
         if (!newAlerts.length && !newInc.length) return s
+        const mergedInc  = [...s.resolvedIncidents, ...newInc].slice(0, 1000)
+        if (newInc.length) saveResolvedIncidents(mergedInc)   // persist incidents pulled from other tabs
         return {
           alertQueue:        [...s.alertQueue, ...newAlerts].slice(0, ALERT_QUEUE_CAP),
-          resolvedIncidents: [...s.resolvedIncidents, ...newInc].slice(0, 1000),
+          resolvedIncidents: mergedInc,
         }
       })
       return

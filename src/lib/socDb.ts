@@ -6,6 +6,7 @@
 // throws into the UI.
 // ─────────────────────────────────────────────────────────────────────────────
 import type { AlertQueueItem, ResolvedIncident } from './store'
+import type { IndustryProfile, IndustryTechnique } from '../data/industryKB'
 
 const DB_BASE = 'http://127.0.0.1:8077'
 
@@ -49,6 +50,64 @@ export async function dbHealth(): Promise<boolean> {
   }
 }
 
+/**
+ * Load persisted resolved incidents back from the DB service (system of record).
+ * Returns [] if the service is unreachable so the caller can fall back to its
+ * in-memory / localStorage copy. Never throws into the UI.
+ */
+export async function fetchIncidents(limit = 500): Promise<ResolvedIncident[]> {
+  if (online === false) return []
+  try {
+    const res = await fetch(`${DB_BASE}/api/incidents?limit=${limit}`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    online = res.ok
+    if (!res.ok) return []
+    const data = await res.json() as { incidents?: ResolvedIncident[] }
+    return data.incidents ?? []
+  } catch {
+    online = false
+    return []
+  }
+}
+
+/**
+ * Mirror the curated Industry Knowledge Base into the DB (idempotent upsert), so
+ * the sector baseline exists as queryable rows. Fire-and-forget; safe if offline.
+ */
+export function seedIndustryBaselines(profiles: IndustryProfile[]): void {
+  void post('/api/industry-baselines/seed', {
+    profiles: profiles.map(p => ({
+      key: p.key, label: p.label, summary: p.summary, threatProfile: p.threatProfile,
+      topThreatActors: p.topThreatActors, logSources: p.logSources,
+      priorityTactics: p.priorityTactics,
+      techniques: p.techniques.map(t => ({ id: t.id, name: t.name, tactic: t.tactic, why: t.why })),
+    })),
+  })
+}
+
+export interface IndustryBaselineRow extends IndustryTechnique {
+  industryKey: string
+  industryLabel: string
+  rank: number
+}
+
+/** Read the sector baseline back from the DB. [] if the service is unreachable. */
+export async function fetchIndustryBaselines(industry = ''): Promise<IndustryBaselineRow[]> {
+  if (online === false) return []
+  try {
+    const qs = industry ? `?industry=${encodeURIComponent(industry)}` : ''
+    const res = await fetch(`${DB_BASE}/api/industry-baselines${qs}`, { signal: AbortSignal.timeout(5000) })
+    online = res.ok
+    if (!res.ok) return []
+    const data = await res.json() as { techniques?: IndustryBaselineRow[] }
+    return data.techniques ?? []
+  } catch {
+    online = false
+    return []
+  }
+}
+
 export function saveAlert(a: AlertQueueItem): void {
   void post('/api/alerts', {
     incidentNo: a.incidentNo ?? '', alertId: a.alertId, useCase: a.useCase,
@@ -66,9 +125,13 @@ export function saveIncident(i: ResolvedIncident): void {
     incidentNo: i.alert.incidentNo ?? '', procId: i.procId, alertId: i.alert.alertId,
     title: i.alert.title, severity: i.alert.severity, verdict: i.verdict,
     riskScore: i.riskScore, confidence: i.confidence, mttr: i.mttr,
-    agentLabel: i.agentLabel, threatActorProfile: i.threatActorProfile,
+    agentLabel: i.agentLabel, agentColor: i.agentColor, isFirstRun: i.isFirstRun,
+    threatActorProfile: i.threatActorProfile,
     attackChain: i.attackChain, recommendations: i.recommendations,
     iocs: i.iocs, techniques: i.techniques,
+    reasoning: i.reasoning ?? '',
+    splunkQueries: i.sampleQueries?.splunk ?? [], kqlQueries: i.sampleQueries?.kql ?? [],
+    resolvedAt: i.resolvedAt,
   })
   // Also persist each IOC into the IOC table, tied to the incident number.
   i.iocs.forEach(v => saveIoc({

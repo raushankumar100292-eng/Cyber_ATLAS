@@ -2,7 +2,7 @@ import {
   Globe, Grid3x3, Shield, ChevronDown, Search,
   Upload as UploadIcon, ArrowRightLeft, Code2, Zap,
   Inbox, BarChart3, Layers, Eye, Sparkles, Network,
-  KeyRound, CheckCircle2, EyeOff, Check,
+  KeyRound, CheckCircle2, EyeOff, Check, FolderSearch, ClipboardCheck,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { useStore } from '../../lib/store'
@@ -334,6 +334,7 @@ export default function TopBar() {
             <NavBtn label="Matrix View"   icon={<Grid3x3        className="w-3.5 h-3.5" />} active={view==='matrix'} viewTarget="matrix" onClick={() => setView('matrix')} />
             <NavBtn label="Data Upload"   icon={<UploadIcon     className="w-3.5 h-3.5" />} active={view==='upload'} viewTarget="upload" onClick={() => setView('upload')} />
             <NavBtn label="Data Analyzer" icon={<ArrowRightLeft className="w-3.5 h-3.5" />} active={view==='delta'}  viewTarget="delta"  onClick={() => setView('delta')} />
+            <NavBtn label="Gap Report"    icon={<ClipboardCheck  className="w-3.5 h-3.5" />} active={view==='gap-report'} viewTarget="gap-report" onClick={() => setView('gap-report')} />
           </>
         )}
 
@@ -344,7 +345,8 @@ export default function TopBar() {
         {role === 'purple' && (
           <>
             <div className="h-4 w-px bg-white/[0.08] mx-0.5" />
-            <NavBtn label="Analytics"     icon={<BarChart3 className="w-3.5 h-3.5" />} active={view==='soc-analytics'} viewTarget="soc-analytics" roleTarget="purple" onClick={() => setView('soc-analytics')} />
+            <NavBtn label="Analytics"     icon={<BarChart3   className="w-3.5 h-3.5" />} active={view==='soc-analytics'} viewTarget="soc-analytics" roleTarget="purple" onClick={() => setView('soc-analytics')} />
+            <NavBtn label="Case Review"   icon={<FolderSearch className="w-3.5 h-3.5" />} active={view==='soc-cases'}     viewTarget="soc-cases"     roleTarget="purple" onClick={() => setView('soc-cases')} />
             <NavBtn label="Campaigns"     icon={<Layers    className="w-3.5 h-3.5" />} active={view==='soc-campaigns'} viewTarget="soc-campaigns" roleTarget="purple" onClick={() => setView('soc-campaigns')} />
             <NavBtn label="IOC Watchlist" icon={<Eye       className="w-3.5 h-3.5" />} active={view==='soc-ioc'}       viewTarget="soc-ioc"       roleTarget="purple" onClick={() => setView('soc-ioc')} />
             <NavBtn label="Agent Hub"     icon={<Network   className="w-3.5 h-3.5" />} active={view==='agent-hub'}     viewTarget="agent-hub"     roleTarget="purple" onClick={() => setView('agent-hub')} />

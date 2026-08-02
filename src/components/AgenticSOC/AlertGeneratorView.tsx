@@ -3,13 +3,15 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useStore } from '../../lib/store'
 import {
   USE_CASES, groqGenerateAlert, localGenerateAlert, parseAlert, buildAlertQueueItem,
-  type UseCaseId, type SiemAlert,
+  localGenerateIndustryAlert, groqGenerateIndustryAlert, pickIndustryTechnique, ucForTactic,
+  type UseCaseId, type SiemAlert, type UseCase,
 } from './alertGenUtils'
+import { getIndustryProfile } from '../../data/industryKB'
 import {
   Zap, Play, Square, Trash2, Copy, Check, ChevronDown, ChevronRight,
   AlertTriangle, Shield, Mail, Server, Database, Key, Network, Cloud,
   Users, Activity, RefreshCw, Clock, Eye, Shuffle, Download,
-  Search, Wrench, Anchor, EyeOff, Bomb,
+  Search, Wrench, Anchor, EyeOff, Bomb, Building2,
 } from 'lucide-react'
 
 // ── Icon / color maps ─────────────────────────────────────────────────────────
@@ -104,7 +106,7 @@ const AlertCard = forwardRef<HTMLDivElement, { entry: AlertEntry; onCopy: (e: Al
           {/* Top meta row */}
           <div className="flex items-center gap-2 flex-wrap mb-1">
             <SevBadge sev={a.severity} />
-            <span className="text-[9.5px] font-mono text-slate-400 tracking-wide">{a.alert_id}</span>
+            <span className="text-[9.5px] font-mono text-slate-300 tracking-wide">{a.alert_id}</span>
             <span className="text-[9.5px] px-1.5 py-0.5 rounded font-mono"
               style={{ background: `${ucColor}15`, color: ucColor, border: `1px solid ${ucColor}30` }}>
               {a.technique_id}
@@ -117,25 +119,25 @@ const AlertCard = forwardRef<HTMLDivElement, { entry: AlertEntry; onCopy: (e: Al
             </span>
           </div>
           {/* Title */}
-          <div className="text-[13px] font-semibold text-white leading-snug truncate">{a.title}</div>
+          <div className="text-[13px] font-bold leading-snug truncate" style={{ color: '#ffffff' }}>{a.title}</div>
           {/* Source → Dest */}
-          <div className="text-[10.5px] text-slate-400 mt-0.5 font-mono truncate">
-            {a.source.hostname}&nbsp;<span className="text-slate-600">·</span>&nbsp;{a.source.user}
-            &nbsp;<span className="text-slate-500">→</span>&nbsp;
+          <div className="text-[10.5px] text-slate-300 mt-0.5 font-mono truncate">
+            {a.source.hostname}&nbsp;<span className="text-slate-500">·</span>&nbsp;{a.source.user}
+            &nbsp;<span className="text-slate-400">→</span>&nbsp;
             {a.destination.hostname ?? a.destination.ip}:{a.destination.port}
           </div>
         </div>
 
         {/* Right actions */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[9.5px] text-slate-500 font-mono tabular-nums">
+          <span className="text-[9.5px] text-slate-400 font-mono tabular-nums">
             {new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
           </span>
           <button onClick={handleCopy} title="Copy JSON" className="p-1 rounded transition-colors hover:bg-white/[0.05]"
-            style={{ color: copied ? '#34d399' : '#475569' }}>
+            style={{ color: copied ? '#34d399' : '#94a3b8' }}>
             {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           </button>
-          <span className="text-slate-600 transition-transform" style={{ transform: open ? 'rotate(90deg)' : 'none', display: 'inline-flex' }}>
+          <span className="transition-transform" style={{ color: '#94a3b8', transform: open ? 'rotate(90deg)' : 'none', display: 'inline-flex' }}>
             <ChevronRight className="w-3.5 h-3.5" />
           </span>
         </div>
@@ -222,7 +224,13 @@ export default function AlertGeneratorView() {
   const setAutoGenUseCase  = useStore(s => s.setAutoGenUseCase)
   const autoGenRotate      = useStore(s => s.autoGenRotate)
   const setAutoGenRotate   = useStore(s => s.setAutoGenRotate)
+  const autoGenIndustryMode    = useStore(s => s.autoGenIndustryMode)
+  const setAutoGenIndustryMode = useStore(s => s.setAutoGenIndustryMode)
+  const industryKey        = useStore(s => s.industryKey)
+  const industryLabel      = useStore(s => s.industryLabel)
   const apiKey             = useStore(s => s.apiKey)
+
+  const industryProfile = getIndustryProfile(industryKey)
 
   const [selectedUC,  setSelectedUC]  = useState<UseCaseId>(() => (autoGenMode ? autoGenUseCase as UseCaseId : 'phishing'))
   const [alerts,      setAlerts]      = useState<AlertEntry[]>([])
@@ -247,31 +255,48 @@ export default function AlertGeneratorView() {
     return () => clearInterval(tick)
   }, [autoGenMode, autoGenInterval])
 
+  const industryActive = autoGenIndustryMode && !!industryProfile
+
   // Manual generate
   const doGenerate = useCallback(async () => {
     if (generatingRef.current) return
     generatingRef.current = true
     setGenerating(true)
     setError('')
-    try {
-      const uc = USE_CASES.find(u => u.id === selectedUC)!
-      let data: SiemAlert
-      if (apiKey.trim()) {
-        data = parseAlert(await groqGenerateAlert(apiKey.trim(), uc))
-      } else {
-        data = localGenerateAlert(uc)
-      }
+
+    const pushEntry = (data: SiemAlert, uc: UseCase) => {
       const qi = buildAlertQueueItem(data, uc)
-      setAlerts(prev => [{ id: qi.id, useCase: selectedUC, alert: data, raw: JSON.stringify(data, null, 2), createdAt: Date.now() }, ...prev].slice(0, 200))
+      setAlerts(prev => [{ id: qi.id, useCase: uc.id, alert: data, raw: JSON.stringify(data, null, 2), createdAt: Date.now() }, ...prev].slice(0, 200))
       pushAlert(qi)
+    }
+
+    try {
+      if (industryActive && industryProfile) {
+        // Industry-targeted: draw a technique from the sector baseline.
+        const tech = pickIndustryTechnique(industryProfile)
+        if (apiKey.trim()) {
+          const data = parseAlert(await groqGenerateIndustryAlert(apiKey.trim(), industryProfile, tech))
+          pushEntry(data, ucForTactic(tech.tactic))
+        } else {
+          const { alert, uc } = localGenerateIndustryAlert(industryProfile, tech)
+          pushEntry(alert, uc)
+        }
+      } else {
+        const uc = USE_CASES.find(u => u.id === selectedUC)!
+        const data = apiKey.trim() ? parseAlert(await groqGenerateAlert(apiKey.trim(), uc)) : localGenerateAlert(uc)
+        pushEntry(data, uc)
+      }
     } catch (e: unknown) {
+      // Groq failed — fall back to a local synthetic alert so generation never stalls.
       try {
-        const uc   = USE_CASES.find(u => u.id === selectedUC)!
-        const data = localGenerateAlert(uc)
-        const qi   = buildAlertQueueItem(data, uc)
-        setAlerts(prev => [{ id: qi.id, useCase: selectedUC, alert: data, raw: JSON.stringify(data, null, 2), createdAt: Date.now() }, ...prev].slice(0, 200))
-        pushAlert(qi)
-        setError(`Groq unavailable — local synthetic alert generated instead.`)
+        if (industryActive && industryProfile) {
+          const { alert, uc } = localGenerateIndustryAlert(industryProfile)
+          pushEntry(alert, uc)
+        } else {
+          const uc = USE_CASES.find(u => u.id === selectedUC)!
+          pushEntry(localGenerateAlert(uc), uc)
+        }
+        setError('Groq unavailable — local synthetic alert generated instead.')
       } catch {
         setError(e instanceof Error ? e.message : String(e))
       }
@@ -279,12 +304,30 @@ export default function AlertGeneratorView() {
       generatingRef.current = false
       setGenerating(false)
     }
-  }, [apiKey, selectedUC, pushAlert])
+  }, [apiKey, selectedUC, pushAlert, industryActive, industryProfile])
 
-  // Mirror store queue → local display list (all use cases, no filter)
+  // Mirror store queue → local display list.
+  //
+  // Alerts that were ALREADY in the queue when this view opened are treated as
+  // "pre-existing" (e.g. from background Auto ticks fired while the user was on
+  // another view) — they stay in the shared queue for Triage/SOC to consume, but
+  // the local feed only shows alerts that arrive from this mount forward. This is
+  // what makes "click Generate once → one card appears" behave as expected.
   const alertQueue = useStore(s => s.alertQueue)
   const seenIdsRef = useRef(new Set<string>())
+  const preExistingCountRef = useRef(0)
+  const [preExistingCount, setPreExistingCount] = useState(0)
+  const hydratedRef = useRef(false)
   useEffect(() => {
+    if (!hydratedRef.current) {
+      // First run: mark everything already in the queue as seen but don't
+      // display it. Snapshot the count so we can surface it as a subtle badge.
+      alertQueue.forEach(a => seenIdsRef.current.add(a.id))
+      preExistingCountRef.current = alertQueue.length
+      setPreExistingCount(alertQueue.length)
+      hydratedRef.current = true
+      return
+    }
     alertQueue.forEach(a => {
       if (seenIdsRef.current.has(a.id)) return
       seenIdsRef.current.add(a.id)
@@ -312,7 +355,18 @@ export default function AlertGeneratorView() {
   }
   const handleStopAuto    = () => { setAutoGenMode(false); setCountdown(0) }
   const handleSelectUC    = (id: UseCaseId) => { setSelectedUC(id); if (autoGenMode) setAutoGenUseCase(id) }
-  const handleClearAll    = () => { setAlerts([]); seenIdsRef.current.clear(); setAutoGenMode(false); setFilterSev('ALL') }
+  const clearAlertQueue = useStore(s => s.clearAlertQueue)
+  const handleClearAll = () => {
+    // Clear both the local display AND the shared store queue, so nothing
+    // silently re-hydrates on the next queue update.
+    setAlerts([])
+    seenIdsRef.current.clear()
+    preExistingCountRef.current = 0
+    setPreExistingCount(0)
+    clearAlertQueue()
+    setAutoGenMode(false)
+    setFilterSev('ALL')
+  }
   const handleCopyEntry   = useCallback(async (e: AlertEntry) => {
     await navigator.clipboard.writeText(JSON.stringify(e.alert, null, 2))
   }, [])
@@ -372,11 +426,34 @@ export default function AlertGeneratorView() {
         </div>
 
         {/* Rotate mode banner */}
-        {autoGenMode && autoGenRotate && (
+        {autoGenMode && autoGenRotate && !industryActive && (
           <div className="mx-2 mt-2 px-2 py-1.5 rounded-md flex items-center gap-1.5"
             style={{ background: 'rgba(167,139,250,0.10)', border: '1px solid rgba(167,139,250,0.25)' }}>
             <Shuffle className="w-3 h-3 text-violet-400 shrink-0" />
             <span className="text-[9.5px] text-violet-300 font-semibold">Rotating all use cases</span>
+          </div>
+        )}
+
+        {/* Industry targeting banner */}
+        {industryActive && industryProfile && (
+          <div className="mx-2 mt-2 px-2 py-2 rounded-md"
+            style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.25)' }}>
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <Building2 className="w-3 h-3 text-emerald-400 shrink-0" />
+              <span className="text-[9.5px] text-emerald-300 font-semibold truncate">{industryLabel} baseline</span>
+            </div>
+            <p className="text-[9px] text-slate-500 leading-relaxed mb-1.5">
+              Alerts drawn from this sector's {industryProfile.techniques.length} priority techniques.
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {industryProfile.techniques.slice(0, 8).map(t => (
+                <span key={t.id} className="text-[8px] font-mono px-1 py-px rounded"
+                  style={{ background: 'rgba(52,211,153,0.10)', color: '#6ee7b7', border: '1px solid rgba(52,211,153,0.20)' }}
+                  title={`${t.name} · ${t.tactic}`}>
+                  {t.id}
+                </span>
+              ))}
+            </div>
           </div>
         )}
 
@@ -397,7 +474,7 @@ export default function AlertGeneratorView() {
                 }}>
                 <div className="w-5 h-5 rounded flex items-center justify-center shrink-0"
                   style={{ background: active ? `${color}22` : `${color}0D` }}>
-                  <Icon className="w-3 h-3" style={{ color: active ? color : `${color}99` }} />
+                  <Icon className="w-3 h-3" style={{ color: active ? color : `${color}cc` }} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-[11px] font-semibold leading-tight truncate"
@@ -414,6 +491,20 @@ export default function AlertGeneratorView() {
             )
           })}
         </div>
+
+        {/* Pre-existing queue note — makes it clear that alerts already in the
+            shared queue (from background Auto ticks while on other views) are not
+            hidden, just not displayed here. */}
+        {preExistingCount > 0 && (
+          <div className="mx-2 mt-2 px-2 py-1.5 rounded-md flex items-center gap-1.5"
+            style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.20)' }}
+            title="Alerts already in the shared queue when you opened this view (e.g. from background Auto ticks). They live in SOC Triage — Clear resets everything.">
+            <Activity className="w-3 h-3 text-sky-400 shrink-0" />
+            <span className="text-[9.5px] text-sky-300">
+              <span className="font-bold font-mono">{preExistingCount}</span> in queue from earlier
+            </span>
+          </div>
+        )}
 
         {/* Session stats footer */}
         {alerts.length > 0 && (
@@ -446,15 +537,29 @@ export default function AlertGeneratorView() {
         <div className="flex items-center gap-0 px-4 py-2 border-b shrink-0"
           style={{ background: 'rgba(7,10,18,0.90)', backdropFilter: 'blur(10px)', borderColor: 'rgba(255,255,255,0.06)' }}>
 
-          {/* Active use case indicator */}
+          {/* Active target indicator */}
           <div className="flex items-center gap-2 pr-3 mr-3 border-r shrink-0" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-            <div className="w-5 h-5 rounded flex items-center justify-center" style={{ background: `${ucColor}18` }}>
-              <UcIcon className="w-3 h-3" style={{ color: ucColor }} />
-            </div>
-            <div>
-              <div className="text-[11px] font-semibold leading-none" style={{ color: ucColor }}>{uc.label}</div>
-              <div className="text-[9px] text-slate-600 leading-none mt-0.5">{uc.tactic}</div>
-            </div>
+            {industryActive ? (
+              <>
+                <div className="w-5 h-5 rounded flex items-center justify-center" style={{ background: 'rgba(52,211,153,0.15)' }}>
+                  <Building2 className="w-3 h-3" style={{ color: '#34d399' }} />
+                </div>
+                <div>
+                  <div className="text-[11px] font-semibold leading-none" style={{ color: '#34d399' }}>{industryLabel}</div>
+                  <div className="text-[9px] text-slate-600 leading-none mt-0.5">{industryProfile!.techniques.length} baseline techniques</div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-5 h-5 rounded flex items-center justify-center" style={{ background: `${ucColor}18` }}>
+                  <UcIcon className="w-3 h-3" style={{ color: ucColor }} />
+                </div>
+                <div>
+                  <div className="text-[11px] font-semibold leading-none" style={{ color: ucColor }}>{uc.label}</div>
+                  <div className="text-[9px] text-slate-600 leading-none mt-0.5">{uc.tactic}</div>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Auto controls group */}
@@ -487,12 +592,35 @@ export default function AlertGeneratorView() {
               style={{
                 background: autoGenRotate ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.04)',
                 border: `1px solid ${autoGenRotate ? 'rgba(167,139,250,0.45)' : 'rgba(255,255,255,0.09)'}`,
-                color: autoGenRotate ? '#a78bfa' : '#475569',
+                color: autoGenRotate ? '#a78bfa' : '#94a3b8',
                 boxShadow: autoGenRotate ? '0 0 10px rgba(167,139,250,0.18)' : undefined,
               }}>
               <Shuffle className="w-3 h-3" />
               Rotate
             </button>
+
+            {/* Industry targeting toggle */}
+            <div className="flex flex-col items-start">
+              <button onClick={() => industryProfile && setAutoGenIndustryMode(!autoGenIndustryMode)}
+                disabled={!industryProfile}
+                title={industryProfile
+                  ? `Generate alerts drawn from the ${industryLabel} threat baseline`
+                  : 'Select an industry via Data Upload to enable industry-targeted alerts'}
+                className="flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[10.5px] font-semibold transition-all"
+                style={{
+                  background: industryActive ? 'rgba(52,211,153,0.15)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${industryActive ? 'rgba(52,211,153,0.45)' : 'rgba(255,255,255,0.14)'}`,
+                  color: industryActive ? '#34d399' : (industryProfile ? '#94a3b8' : '#64748b'),
+                  boxShadow: industryActive ? '0 0 10px rgba(52,211,153,0.18)' : undefined,
+                  cursor: industryProfile ? 'pointer' : 'not-allowed',
+                }}>
+                <Building2 className="w-3 h-3" />
+                Industry
+              </button>
+              {!industryProfile && (
+                <span className="text-[8px] text-slate-500 mt-0.5 whitespace-nowrap">Needs industry (Data Upload)</span>
+              )}
+            </div>
 
             {/* Running status */}
             {autoGenMode && (
@@ -533,7 +661,7 @@ export default function AlertGeneratorView() {
               style={{
                 background: autoGenMode ? 'rgba(248,113,113,0.10)' : 'rgba(255,255,255,0.03)',
                 border: `1px solid ${autoGenMode ? 'rgba(248,113,113,0.35)' : 'rgba(255,255,255,0.07)'}`,
-                color: autoGenMode ? '#f87171' : '#334155',
+                color: autoGenMode ? '#f87171' : '#64748b',
                 cursor: autoGenMode ? 'pointer' : 'not-allowed',
               }}>
               <Square className="w-3 h-3" />Stop Auto
@@ -550,7 +678,7 @@ export default function AlertGeneratorView() {
                 <button onClick={handleClearAll}
                   title="Clear all alerts and stop auto-generation"
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer"
-                  style={{ background: 'rgba(100,116,139,0.07)', border: '1px solid rgba(100,116,139,0.18)', color: '#475569' }}>
+                  style={{ background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.22)', color: '#94a3b8' }}>
                   <Trash2 className="w-3 h-3" />Clear
                 </button>
               </>
@@ -586,7 +714,7 @@ export default function AlertGeneratorView() {
                   style={{
                     background: active ? (meta?.bg ?? 'rgba(255,255,255,0.08)') : 'transparent',
                     border: `1px solid ${active ? (meta?.border ?? 'rgba(255,255,255,0.18)') : 'transparent'}`,
-                    color: active ? (meta?.text ?? '#e2e8f0') : '#475569',
+                    color: active ? (meta?.text ?? '#e2e8f0') : '#94a3b8',
                     boxShadow: active && meta ? `0 0 8px ${meta.glow}` : undefined,
                   }}>
                   {label}

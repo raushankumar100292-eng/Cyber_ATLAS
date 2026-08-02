@@ -1,14 +1,47 @@
 import type { UseCaseEntry, UseCaseAnalysis, CoverageDataset } from './types'
 import type { DeltaDoc, DeltaResult } from './delta'
 import { buildDeltaPrompt } from './delta'
+import type { IndustryProfile } from '../data/industryKB'
+import { computeIndustryGaps } from '../data/industryKB'
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'llama-3.3-70b-versatile'
+
+function buildIndustrySection(
+  profile: IndustryProfile,
+  coverage: CoverageDataset,
+): string {
+  // Compare the client's covered technique IDs against the sector baseline.
+  const coveredIds = coverage.entries.map(e => e.techniqueId)
+  const { covered, missing, coveragePct } = computeIndustryGaps(profile, coveredIds)
+
+  const expectedLines = profile.techniques
+    .map(t => `  - ${t.id} ${t.name} (${t.tactic}) — ${t.why}`)
+    .join('\n')
+  const missingLines = missing.length > 0
+    ? missing.map(t => `  - ${t.id} ${t.name} (${t.tactic})`).join('\n')
+    : '  - None — the client covers the full sector baseline.'
+
+  return `## Industry Context — ${profile.label}
+- **Sector posture**: ${profile.summary}
+- **Threat profile**: ${profile.threatProfile}
+- **Top threat actors targeting this sector**: ${profile.topThreatActors.join(', ')}
+- **Expected log sources for this sector**: ${profile.logSources.join(', ')}
+- **Sector-baseline coverage**: the client covers ${covered.length}/${profile.techniques.length} (${coveragePct}%) of the techniques this industry should prioritise.
+
+### Expected high-priority techniques for this industry
+${expectedLines}
+
+### Sector-baseline techniques the client is MISSING
+${missingLines}
+`
+}
 
 function buildPrompt(
   coverage: CoverageDataset,
   useCases: UseCaseEntry[],
   analysis: UseCaseAnalysis,
+  industryProfile?: IndustryProfile | null,
 ): string {
   const tacticLines = analysis.tacticBreakdown
     .map(t => `  - ${t.tacticName}: ${t.count} detection(s)`)
@@ -55,27 +88,27 @@ ${gapText}
 
 ## Sample Detection Use Cases
 ${sampleUseCases || '  (use case format not detected)'}
-
+${industryProfile ? '\n' + buildIndustrySection(industryProfile, coverage) : ''}
 ---
 
 Based on this data, provide a structured security analysis using exactly this format:
 
 ## Executive Summary
-Write 2–3 sentences summarising the organisation's overall MITRE ATT&CK coverage posture and maturity level.
+Write 2–3 sentences summarising the organisation's overall MITRE ATT&CK coverage posture and maturity level${industryProfile ? `, relative to what a ${industryProfile.label} organisation should have` : ''}.
 
 ## Key Strengths
 List 3 specific areas where the coverage is strong, citing actual tactics or techniques from the data.
 
 ## Critical Gaps
-List the top 3 highest-priority coverage gaps, explaining the business risk of each.
+List the top 3 highest-priority coverage gaps, explaining the business risk of each${industryProfile ? '. Prioritise gaps against the sector-baseline techniques the client is MISSING above, and name the threat actor(s) that exploit each gap in this industry' : ''}.
 
 ## Recommendations
-Provide 4 specific, actionable next steps to improve coverage, referencing actual MITRE tactics/techniques.
+Provide 4 specific, actionable next steps to improve coverage, referencing actual MITRE tactics/techniques${industryProfile ? ` and the expected log sources for ${industryProfile.label}` : ''}.
 
 ## Risk Rating
-State: **High / Medium / Low** — then one sentence explaining the rating based on the gaps found.
+State: **High / Medium / Low** — then one sentence explaining the rating based on the gaps found${industryProfile ? ' and the threat level this sector faces' : ''}.
 
-Be concise, specific, and technical. Use ATT&CK tactic/technique IDs where relevant.`
+Be concise, specific, and technical. Use ATT&CK tactic/technique IDs where relevant.${industryProfile ? ' Ground your analysis in the Industry Context section — do not give generic advice that ignores the sector threat profile.' : ''}`
 }
 
 export interface GroqStreamCallbacks {
@@ -90,8 +123,9 @@ export async function analyzeWithGroq(
   useCases: UseCaseEntry[],
   analysis: UseCaseAnalysis,
   callbacks: GroqStreamCallbacks,
+  industryProfile?: IndustryProfile | null,
 ) {
-  const prompt = buildPrompt(coverage, useCases, analysis)
+  const prompt = buildPrompt(coverage, useCases, analysis, industryProfile)
 
   let response: Response
   try {
@@ -107,7 +141,8 @@ export async function analyzeWithGroq(
           {
             role: 'system',
             content:
-              'You are a senior cybersecurity analyst specialising in MITRE ATT&CK framework analysis. Provide clear, structured, actionable security insights.',
+              'You are a senior cybersecurity analyst specialising in MITRE ATT&CK framework analysis. Provide clear, structured, actionable security insights.'
+              + (industryProfile ? ` Tailor every finding to a ${industryProfile.label} organisation using the supplied industry threat profile — do not give sector-generic advice.` : ''),
           },
           { role: 'user', content: prompt },
         ],

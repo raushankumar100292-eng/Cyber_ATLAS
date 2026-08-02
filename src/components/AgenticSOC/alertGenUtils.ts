@@ -1,4 +1,5 @@
 import type { AlertQueueItem } from '../../lib/store'
+import type { IndustryProfile, IndustryTechnique } from '../../data/industryKB'
 
 export const GROQ_KEY_STORAGE = 'atlas_groq_key'
 
@@ -242,6 +243,97 @@ export function localGenerateAlert(uc: UseCase): SiemAlert {
     raw_log:     `${new Date().toISOString()} host=${host} user=${user} tech=${techId} action=detected proc=${proc}`,
     recommended_action: t.action,
   }
+}
+
+// ── Industry-targeted generation ──────────────────────────────────────────────
+// Maps a MITRE tactic (as used in the KB) to the closest Alert-Generator use case,
+// so an industry-baseline technique can reuse that use case's realistic template
+// (procs/ports/dests/evidence) while the alert carries the KB's real technique.
+const TACTIC_TO_UC: Record<string, UseCaseId> = {
+  'Reconnaissance': 'recon',
+  'Resource Development': 'resourcedev',
+  'Initial Access': 'phishing',
+  'Execution': 'malware',
+  'Persistence': 'persistence',
+  'Privilege Escalation': 'privesc',
+  'Defense Evasion': 'defevasion',
+  'Credential Access': 'brute',
+  'Discovery': 'cloud',
+  'Lateral Movement': 'lateral',
+  'Collection': 'insider',
+  'Command and Control': 'c2',
+  'Exfiltration': 'exfil',
+  'Impact': 'impact',
+}
+
+export function ucForTactic(tactic: string): UseCase {
+  const id = TACTIC_TO_UC[tactic] ?? 'malware'
+  return USE_CASES.find(u => u.id === id) ?? USE_CASES[3]
+}
+
+/** Pick a baseline technique for an industry (specific index for rotate, else random). */
+export function pickIndustryTechnique(profile: IndustryProfile, index?: number): IndustryTechnique {
+  const list = profile.techniques
+  if (list.length === 0) return { id: 'T1566', name: 'Phishing', tactic: 'Initial Access', why: '' }
+  if (typeof index === 'number') return list[index % list.length]
+  return pick(list)
+}
+
+/**
+ * Local (no-API-key) industry-targeted alert: draws a technique from the sector
+ * baseline, reuses the tactic's template for realism, then overrides the technique
+ * and context so the alert reflects the industry's real threat profile.
+ */
+export function localGenerateIndustryAlert(
+  profile: IndustryProfile,
+  tech?: IndustryTechnique,
+): { alert: SiemAlert; uc: UseCase } {
+  const kbTech = tech ?? pickIndustryTechnique(profile)
+  const uc = ucForTactic(kbTech.tactic)
+  const base = localGenerateAlert(uc)
+  const alert: SiemAlert = {
+    ...base,
+    tactic: kbTech.tactic,
+    technique_id: kbTech.id,
+    technique_name: kbTech.name,
+    description: `[${profile.label}] ${kbTech.name} activity detected on ${base.source.hostname} involving ${base.source.user}. ${kbTech.why}`,
+  }
+  return { alert, uc }
+}
+
+/** Groq industry-targeted alert — grounds the LLM in the sector + the chosen technique. */
+export async function groqGenerateIndustryAlert(
+  apiKey: string,
+  profile: IndustryProfile,
+  tech: IndustryTechnique,
+): Promise<string> {
+  const counter = String(Math.floor(Math.random() * 9000) + 1000)
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const actors = profile.topThreatActors.slice(0, 4).join(', ')
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a SIEM alert generator for security operations testing. Generate realistic, varied security alerts grounded in the target industry. Output ONLY valid JSON — no markdown, no code fences.',
+        },
+        {
+          role: 'user',
+          content: `Generate one realistic SIEM alert for a ${profile.label} organisation.\nThreat context: ${profile.threatProfile}\nLikely threat actors: ${actors}\nThis alert MUST reflect MITRE technique ${tech.id} (${tech.name}), tactic ${tech.tactic}. Why it matters here: ${tech.why}\n\nReturn EXACTLY this JSON:\n{\n  "alert_id": "ALT-${dateStr}-${counter}",\n  "timestamp": "${new Date().toISOString()}",\n  "severity": "<CRITICAL|HIGH|MEDIUM|LOW>",\n  "title": "<5-10 word title>",\n  "description": "<2-3 sentences, sector-specific>",\n  "tactic": "${tech.tactic}",\n  "technique_id": "${tech.id}",\n  "technique_name": "${tech.name}",\n  "source": { "ip": "<RFC1918 or public IP>", "hostname": "<sector-appropriate hostname>", "user": "<user@corp.com>", "process": "<name or null>" },\n  "destination": { "ip": "<IP>", "hostname": "<host or domain>", "port": <integer> },\n  "evidence": ["<item1>","<item2>","<item3>"],\n  "raw_log": "<one raw log line>",\n  "recommended_action": "<first-response action>"\n}\nMake IPs/users/hosts realistic and varied each time.`,
+        },
+      ],
+      temperature: 0.9,
+      max_tokens: 800,
+    }),
+  })
+
+  if (!res.ok) throw new Error(`Groq API error ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content ?? ''
 }
 
 export function buildAlertQueueItem(data: SiemAlert, uc: UseCase): AlertQueueItem {
