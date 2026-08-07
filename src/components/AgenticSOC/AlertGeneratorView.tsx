@@ -7,11 +7,12 @@ import {
   type UseCaseId, type SiemAlert, type UseCase,
 } from './alertGenUtils'
 import { getIndustryProfile } from '../../data/industryKB'
+import AgenticTriageLayer from './AgenticTriageLayer'
 import {
   Zap, Play, Square, Trash2, Copy, Check, ChevronDown, ChevronRight,
   AlertTriangle, Shield, Mail, Server, Database, Key, Network, Cloud,
   Users, Activity, RefreshCw, Clock, Eye, Shuffle, Download,
-  Search, Wrench, Anchor, EyeOff, Bomb, Building2,
+  Search, Wrench, Anchor, EyeOff, Bomb, Building2, Layers, Workflow, ExternalLink,
 } from 'lucide-react'
 
 // ── Icon / color maps ─────────────────────────────────────────────────────────
@@ -237,6 +238,7 @@ export default function AlertGeneratorView() {
   const [generating,  setGenerating]  = useState(false)
   const [countdown,   setCountdown]   = useState(0)
   const [error,       setError]       = useState('')
+  const [showTriage,  setShowTriage]  = useState(false)
   const [filterSev,   setFilterSev]   = useState<FilterSev>('ALL')
 
   const generatingRef  = useRef(false)
@@ -400,6 +402,11 @@ export default function AlertGeneratorView() {
 
   return (
     <div className="h-full flex overflow-hidden" style={{ background: 'rgba(7,10,18,0.95)' }}>
+
+      {/* ── Agentic Triage Layer (full-screen overlay) ───────────────────── */}
+      <AnimatePresence>
+        {showTriage && <AgenticTriageLayer onClose={() => setShowTriage(false)} />}
+      </AnimatePresence>
 
       {/* ── Left sidebar ─────────────────────────────────────────────────── */}
       <div className="w-56 shrink-0 flex flex-col border-r overflow-hidden"
@@ -621,6 +628,35 @@ export default function AlertGeneratorView() {
                 <span className="text-[8px] text-slate-500 mt-0.5 whitespace-nowrap">Needs industry (Data Upload)</span>
               )}
             </div>
+
+            {/* Agentic Triage Layer — entry point */}
+            <button onClick={() => setShowTriage(true)}
+              title="Open the Agentic Triage Layer — triage the alert queue and map to playbooks, SOAR & the KB"
+              className="flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[10.5px] font-semibold transition-all cursor-pointer"
+              style={{
+                background: 'rgba(0,229,255,0.10)',
+                border: '1px solid rgba(0,229,255,0.35)',
+                color: '#00e5ff',
+                boxShadow: '0 0 10px rgba(0,229,255,0.14)',
+              }}>
+              <Layers className="w-3 h-3" />
+              Agentic Triage
+            </button>
+
+            {/* AI Agent Studio — opens the plug-and-play editor in a new page */}
+            <button onClick={() => window.open(`${window.location.pathname}?studio=1`, '_blank')}
+              title="Open the AI Agent Studio — build investigation pipelines from plug-and-play agents (new tab)"
+              className="flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[10.5px] font-semibold transition-all cursor-pointer"
+              style={{
+                background: 'rgba(129,140,248,0.12)',
+                border: '1px solid rgba(129,140,248,0.40)',
+                color: '#a5b4fc',
+                boxShadow: '0 0 10px rgba(129,140,248,0.16)',
+              }}>
+              <Workflow className="w-3 h-3" />
+              AI Agent Studio
+              <ExternalLink className="w-2.5 h-2.5 opacity-70" />
+            </button>
 
             {/* Running status */}
             {autoGenMode && (

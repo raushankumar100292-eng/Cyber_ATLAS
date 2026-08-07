@@ -8,7 +8,12 @@ import {
 } from 'lucide-react'
 import JSZip from 'jszip'
 import { generatePlaybookFlow } from '../../lib/groq'
-import type { PlaybookFlow, FlowNode, FlowEdge } from '../../lib/groq'
+import type { PlaybookFlow, FlowNode, FlowEdge, TokenUsage } from '../../lib/groq'
+import {
+  hashPlan, lookupPlaybook, savePlaybook, recordTokenUsage,
+  type PlaybookRecord,
+} from '../../lib/socDb'
+import { MODEL } from '../../lib/groq'
 
 // ── Layout constants (overlap-free) ──────────────────────────────────────────
 const NODE_W    = 190
@@ -454,15 +459,14 @@ async function extractFileText(file: File): Promise<string> {
   throw new Error(`Unsupported file type: .${ext}`)
 }
 
-// ── Saved playbook shape (passed to parent) ───────────────────────────────────
-export interface GeneratedPlaybook {
-  id: string
-  name: string
-  trigger: string
-  description: string
-  nodeCount: number
-  createdAt: string
-  flow: PlaybookFlow
+// ── Saved playbook shape (passed to parent) — the live library record ─────────
+export type GeneratedPlaybook = PlaybookRecord
+
+// Infer a few tags from the flow (integrations/tools used) for the card view.
+function inferTags(flow: PlaybookFlow): string[] {
+  const tools = new Set<string>()
+  for (const n of flow.nodes) if (n.tool) tools.add(n.tool)
+  return Array.from(tools).slice(0, 6)
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -470,13 +474,19 @@ interface Props {
   onClose: () => void
   apiKey: string
   onGenerated: (pb: GeneratedPlaybook) => void
+  /** How to label playbooks made here. 'manual' = built from a human response plan. */
+  source?: PlaybookRecord['source']
+  createdBy?: string
+  /** When provided, open straight to the flow view (read-only) instead of the input step. */
+  initialFlow?: PlaybookFlow
 }
 
-export default function PlaybookBuilder({ onClose, apiKey, onGenerated }: Props) {
-  const [phase, setPhase]       = useState<'input' | 'generating' | 'result'>('input')
+export default function PlaybookBuilder({ onClose, apiKey, onGenerated, source = 'manual', createdBy = 'You', initialFlow }: Props) {
+  const [phase, setPhase]       = useState<'input' | 'generating' | 'result'>(initialFlow ? 'result' : 'input')
   const [name, setName]         = useState('')
   const [planText, setPlanText] = useState('')
-  const [flow, setFlow]         = useState<PlaybookFlow | null>(null)
+  const [flow, setFlow]         = useState<PlaybookFlow | null>(initialFlow ?? null)
+  const [reused, setReused]     = useState(false)
   const [error, setError]       = useState<string | null>(null)
   const [platform, setPlatform] = useState<'chronicle'|'azure'|'splunk'>('chronicle')
   const [copied, setCopied]     = useState(false)
@@ -520,26 +530,59 @@ export default function PlaybookBuilder({ onClose, apiKey, onGenerated }: Props)
   const handleGenerate = useCallback(async () => {
     if (!planText.trim()) { setError('Please describe your response plan.'); return }
     if (!apiKey.trim())   { setError('Set your Groq API key on the SOAR home page.'); return }
-    setError(null); setPhase('generating')
+    setError(null); setReused(false); setPhase('generating')
+
+    // Reuse path — if this exact plan was generated before, reuse it (no tokens spent).
+    const contentHash = hashPlan(planText.trim())
+    const existing = await lookupPlaybook(contentHash)
+    if (existing) {
+      let f = existing.flow
+      if (name.trim() && f) f = { ...f, name: name.trim() }
+      setFlow(f); setReused(true); setPhase('result')
+      onGenerated(existing)
+      return
+    }
+
+    // Capture token usage from the generation, so consumption is tracked.
+    let usage: TokenUsage | null = null
     await generatePlaybookFlow(apiKey.trim(), planText.trim(), {
+      onUsage: (u) => { usage = u },
       onDone: (f) => {
         if (name.trim()) f = { ...f, name: name.trim() }
         setFlow(f)
         setPhase('result')
-        // Auto-save to parent immediately
-        onGenerated({
-          id: `gen-${Date.now()}`,
+        const now = Date.now()
+        const record: PlaybookRecord = {
+          id: `pb-${now}`,
           name: f.name,
-          trigger: f.trigger,
+          source,
+          status: 'draft',
+          version: 1,
+          useCase: f.trigger || '',
+          tags: inferTags(f),
+          createdBy,
           description: f.description,
+          trigger: f.trigger,
           nodeCount: f.nodes.length,
-          createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           flow: f,
-        })
+          contentHash,
+          createdAtMs: now,
+          updatedAtMs: now,
+          lastUsedAtMs: 0,
+        }
+        savePlaybook(record)
+        if (usage) {
+          recordTokenUsage({
+            feature: 'playbook_generation', model: MODEL,
+            promptTokens: usage.promptTokens, completionTokens: usage.completionTokens,
+            totalTokens: usage.totalTokens, refId: record.id,
+          })
+        }
+        onGenerated(record)
       },
       onError: (e) => { setError(e); setPhase('input') },
     })
-  }, [planText, apiKey, name, onGenerated])
+  }, [planText, apiKey, name, onGenerated, source, createdBy])
 
   const handleCopy = useCallback(async () => {
     await navigator.clipboard.writeText(exportJson)
@@ -744,6 +787,13 @@ export default function PlaybookBuilder({ onClose, apiKey, onGenerated }: Props)
                       <span className="text-[11px] font-mono" style={{ color: '#94a3b8' }}>
                         {flow.nodes.length} nodes · {flow.edges.length} edges
                       </span>
+                      {reused && (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                          style={{ background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.35)', color: '#059669' }}
+                          title="This exact response plan was already in the library — reused instead of spending tokens.">
+                          ♻ Reused from library
+                        </span>
+                      )}
                       <div className="ml-auto flex items-center gap-3">
                         {/* Legend */}
                         {(['trigger','action','condition','notification','end'] as FlowNode['type'][]).map(t => (

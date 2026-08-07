@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { AlertQueueItem, ResolvedIncident } from './store'
 import type { IndustryProfile, IndustryTechnique } from '../data/industryKB'
+import type { PlaybookFlow } from './groq'
 
 const DB_BASE = 'http://127.0.0.1:8077'
 
@@ -164,6 +165,114 @@ export function saveIoc(row: {
   incidentNo: string; type: string; value: string; severity: string; source: string
 }): void {
   void post('/api/iocs', row)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Response Playbooks — the live, reusable library (DB-backed).
+// ─────────────────────────────────────────────────────────────────────────────
+export type PlaybookSource = 'manual' | 'ai'
+export type PlaybookRecStatus = 'draft' | 'active' | 'approved' | 'paused' | 'archived'
+
+export interface PlaybookRecord {
+  id:           string
+  name:         string
+  source:       PlaybookSource
+  status:       PlaybookRecStatus
+  version:      number
+  useCase:      string
+  tags:         string[]
+  createdBy:    string
+  description:  string
+  trigger:      string
+  nodeCount:    number
+  flow:         PlaybookFlow
+  contentHash:  string
+  createdAtMs:  number
+  updatedAtMs:  number
+  lastUsedAtMs: number
+}
+
+/** Deterministic content hash of a response plan → reuse key (djb2, hex). */
+export function hashPlan(text: string): string {
+  const norm = text.trim().replace(/\s+/g, ' ').toLowerCase()
+  let h = 5381
+  for (let i = 0; i < norm.length; i++) h = ((h << 5) + h + norm.charCodeAt(i)) >>> 0
+  return `h${h.toString(16)}`
+}
+
+/** Load the full playbook library from the DB. [] if the service is unreachable. */
+export async function fetchPlaybooks(): Promise<PlaybookRecord[]> {
+  if (online === false) return []
+  try {
+    const res = await fetch(`${DB_BASE}/api/playbooks`, { signal: AbortSignal.timeout(5000) })
+    online = res.ok
+    if (!res.ok) return []
+    const data = await res.json() as { playbooks?: PlaybookRecord[] }
+    return data.playbooks ?? []
+  } catch {
+    online = false
+    return []
+  }
+}
+
+/** Reuse path — return an existing playbook whose plan hash matches, or null. */
+export async function lookupPlaybook(contentHash: string): Promise<PlaybookRecord | null> {
+  if (online === false || !contentHash) return null
+  try {
+    const res = await fetch(`${DB_BASE}/api/playbooks/lookup?hash=${encodeURIComponent(contentHash)}`,
+      { signal: AbortSignal.timeout(5000) })
+    online = res.ok
+    if (!res.ok) return null
+    const data = await res.json() as { found?: boolean; playbook?: PlaybookRecord | null }
+    return data.found ? (data.playbook ?? null) : null
+  } catch {
+    online = false
+    return null
+  }
+}
+
+/** Insert/replace a playbook (idempotent upsert by id). Fire-and-forget. */
+export function savePlaybook(pb: PlaybookRecord): void {
+  void post('/api/playbooks', pb)
+}
+
+export function deletePlaybook(id: string): void {
+  void post('/api/playbooks/delete', { id })
+}
+
+/** Mark a playbook recently used (drives the 'Recently Used' category). */
+export function touchPlaybook(id: string): void {
+  void post('/api/playbooks/touch', { id })
+}
+
+// ── Token accounting ────────────────────────────────────────────────────────────
+export interface TokenFeatureSummary {
+  feature: string; calls: number; tokens: number
+  promptTokens: number; completionTokens: number
+}
+export interface TokenSummary {
+  totalCalls: number; totalTokens: number; byFeature: TokenFeatureSummary[]
+}
+
+export function recordTokenUsage(row: {
+  feature: string; model: string
+  promptTokens: number; completionTokens: number; totalTokens: number; refId?: string
+}): void {
+  void post('/api/token-usage', { refId: '', ...row })
+}
+
+export async function fetchTokenSummary(): Promise<TokenSummary> {
+  const empty: TokenSummary = { totalCalls: 0, totalTokens: 0, byFeature: [] }
+  if (online === false) return empty
+  try {
+    const res = await fetch(`${DB_BASE}/api/token-usage/summary`, { signal: AbortSignal.timeout(5000) })
+    online = res.ok
+    if (!res.ok) return empty
+    return await res.json() as TokenSummary
+  } catch {
+    online = false
+    return empty
+  }
 }
 
 // crude IOC classifier for the IOC table

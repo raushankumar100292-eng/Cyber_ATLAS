@@ -5,7 +5,7 @@ import type { IndustryProfile } from '../data/industryKB'
 import { computeIndustryGaps } from '../data/industryKB'
 
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'llama-3.3-70b-versatile'
+export const MODEL = 'llama-3.3-70b-versatile'
 
 function buildIndustrySection(
   profile: IndustryProfile,
@@ -884,12 +884,19 @@ export interface PlaybookFlow {
   edges: FlowEdge[]
 }
 
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
 export async function generatePlaybookFlow(
   apiKey: string,
   planText: string,
   callbacks: {
     onDone: (flow: PlaybookFlow) => void
     onError: (err: string) => void
+    onUsage?: (usage: TokenUsage) => void
   }
 ): Promise<void> {
   const systemPrompt = `You are a SOAR expert. Parse the security response plan and return a structured playbook as JSON only (no markdown, no explanation).
@@ -949,6 +956,14 @@ Rules:
     }
 
     const data = await res.json()
+    const usage = data.usage
+    if (usage && callbacks.onUsage) {
+      callbacks.onUsage({
+        promptTokens: usage.prompt_tokens ?? 0,
+        completionTokens: usage.completion_tokens ?? 0,
+        totalTokens: usage.total_tokens ?? 0,
+      })
+    }
     const content: string = data.choices?.[0]?.message?.content ?? ''
     const cleaned = content
       .replace(/^```(?:json)?\s*/i, '')

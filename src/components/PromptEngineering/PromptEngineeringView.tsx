@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Wand2, Copy, Check, RefreshCw, ChevronDown, X,
   Loader2, Info, Sparkles,
-  BookOpen, Trash2, Plus,
+  BookOpen, Trash2, Plus, Send,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '../../lib/store'
@@ -12,6 +12,9 @@ import {
   type RephraseStyle,
   REPHRASE_STYLE_META,
 } from '../../lib/splKqlGroq'
+import { useAgentProStore } from '../../lib/agentProStore'
+import { executeOnMasterAgent } from '../../services/masterAgentService'
+import AgentProConnectionPanel from './AgentProConnectionPanel'
 
 const STYLE_COLORS: Record<RephraseStyle, string> = {
   'clearer':          'text-cyan-700 bg-cyan-50 border-cyan-200',
@@ -72,7 +75,8 @@ function HistoryItem({
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 export default function PromptEngineeringView() {
-  const apiKey = useStore(s => s.apiKey)
+  const apiKey   = useStore(s => s.apiKey)
+  const { connected, enabledProvider, sessionId, masterAgentUrl } = useAgentProStore()
 
   const [prompt, setPrompt]       = useState('')
   const [context, setContext]     = useState('')
@@ -84,9 +88,27 @@ export default function PromptEngineeringView() {
   const [history, setHistory]     = useState<HistoryEntry[]>([])
   const [showContext, setShowContext] = useState(false)
 
+  // ── Agent Pro execution state ──
+  const [agentResponse, setAgentResponse] = useState('')
+  const [agentRunning, setAgentRunning]   = useState(false)
+  const [agentError, setAgentError]       = useState('')
+
   const abortRef = useRef(false)
 
-  const canRephrase = !!apiKey && !!prompt.trim() && !streaming
+  const canRephrase  = !!apiKey && !!prompt.trim() && !streaming
+  const canSendViaAgentPro = connected && !!enabledProvider && !!prompt.trim()
+
+  async function handleSendViaAgentPro() {
+    if (!canSendViaAgentPro || agentRunning) return
+    if (!sessionId) { setAgentError('No active session — reconnect to Agent Pro.'); return }
+    setAgentRunning(true)
+    setAgentResponse('')
+    setAgentError('')
+    const result = await executeOnMasterAgent(masterAgentUrl, sessionId, prompt.trim())
+    setAgentRunning(false)
+    if (result.success) setAgentResponse(result.response ?? '')
+    else setAgentError(result.error ?? 'Execution failed')
+  }
 
   async function handleRephrase() {
     if (!canRephrase) return
@@ -148,6 +170,8 @@ export default function PromptEngineeringView() {
 
         <div className="flex-1 overflow-auto p-6 space-y-4">
 
+          {/* ── Agent Pro connection panel ── */}
+          <AgentProConnectionPanel />
 
           {/* ── Prompt input panel ── */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -215,7 +239,7 @@ export default function PromptEngineeringView() {
               ))}
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <button onClick={handleRephrase} disabled={!canRephrase}
                 className={clsx(
                   'flex items-center gap-2 h-10 px-6 rounded-xl font-semibold text-sm transition-all shadow-sm',
@@ -227,6 +251,30 @@ export default function PromptEngineeringView() {
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Rephrasing…</>
                   : <><Wand2 className="w-4 h-4" /> Rephrase</>}
               </button>
+
+              {/* Send via Agent Pro — runs the prompt on the connected agent */}
+              <button
+                onClick={handleSendViaAgentPro}
+                disabled={!canSendViaAgentPro || agentRunning}
+                title={
+                  !connected
+                    ? 'Connect to Agent Pro before using AI providers.'
+                    : !enabledProvider
+                      ? 'Enable a provider (Claude Code CLI) first.'
+                      : 'Run this prompt on the connected agent'
+                }
+                className={clsx(
+                  'flex items-center gap-2 h-10 px-5 rounded-xl font-semibold text-sm transition-all border',
+                  canSendViaAgentPro && !agentRunning
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm shadow-emerald-200 hover:bg-emerald-700'
+                    : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed',
+                )}
+              >
+                {agentRunning
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Running…</>
+                  : <><Send className="w-4 h-4" /> Send via Agent Pro</>}
+              </button>
+
               {apiKey
                 ? <span className={clsx('text-[11px] px-2 py-0.5 rounded-full border font-medium', STYLE_COLORS[style])}>
                     {REPHRASE_STYLE_META[style].label}
@@ -285,6 +333,39 @@ export default function PromptEngineeringView() {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* ── Agent Pro response ── */}
+          {(agentResponse || agentRunning || agentError) && (
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-2xl border border-emerald-200 shadow-sm overflow-hidden">
+              <div className="px-4 py-3 border-b border-emerald-100 bg-emerald-50/60 flex items-center gap-2">
+                <Send className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="text-xs font-semibold text-emerald-800">Agent Pro Response</span>
+                {agentRunning && <span className="text-[10px] text-slate-400">running on the connected agent…</span>}
+                {agentResponse && !agentRunning && (
+                  <button onClick={() => navigator.clipboard.writeText(agentResponse)}
+                    className="ml-auto flex items-center gap-1 h-6 px-2.5 rounded-md text-[11px] bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
+                    <Copy className="w-3 h-3" /> Copy
+                  </button>
+                )}
+              </div>
+              <div className="px-4 py-4 min-h-[64px]">
+                {agentRunning && !agentResponse && (
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Waiting for the agent… (Claude CLI can take ~20–30s)
+                  </div>
+                )}
+                {agentError && (
+                  <div className="flex items-start gap-2 text-xs text-red-700">
+                    <X className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {agentError}
+                  </div>
+                )}
+                {agentResponse && (
+                  <p className="font-mono text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">{agentResponse}</p>
+                )}
+              </div>
+            </motion.div>
+          )}
 
           {/* ── Tips ── */}
           {!prompt && !rephrased && (

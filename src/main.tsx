@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App'
 import AcnImmersiveTab from './AcnImmersiveTab'
+import AgentStudioTab from './AgentStudioTab'
 import { ATLAS_BUILD } from './lib/store'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -34,14 +35,18 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 // Build marker (defined in store) — confirms the browser is running fresh code.
 console.log(`%c[ATLAS build] ${ATLAS_BUILD}`, 'color:#00e5ff;font-weight:bold')
 
-// A tab opened via "Launch Immersive Mode" / "Tik Tik ON" carries ?acn=immersive
-// so it renders only the immersive experience instead of the full dashboard.
-const isImmersiveTab = new URLSearchParams(window.location.search).get('acn') === 'immersive'
+// Standalone tabs carry a query flag so they render only their own experience
+// instead of the full dashboard:
+//   ?acn=immersive → ACN immersive mode
+//   ?studio=1      → AI Agent Studio (light-themed plug-and-play editor)
+const params = new URLSearchParams(window.location.search)
+const isImmersiveTab = params.get('acn') === 'immersive'
+const isStudioTab    = params.get('studio') === '1'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      {isImmersiveTab ? <AcnImmersiveTab /> : <App />}
+      {isImmersiveTab ? <AcnImmersiveTab /> : isStudioTab ? <AgentStudioTab /> : <App />}
     </ErrorBoundary>
   </StrictMode>
 )

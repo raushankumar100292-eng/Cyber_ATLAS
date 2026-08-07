@@ -23,6 +23,7 @@ working (it just doesn't persist).
 from __future__ import annotations
 
 import os
+import json
 import datetime as dt
 from pathlib import Path
 from typing import Any, Optional
@@ -133,6 +134,28 @@ TABLES: dict[str, str] = {
             TechniqueId TEXT(40), TechniqueName TEXT(150),
             Tactic TEXT(80), Rationale MEMO, [Rank] LONG, UpdatedAt DATETIME
         )""",
+    # Response Playbooks — the live, reusable library. The full flow is stored as
+    # JSON (FlowJson) so a previously generated playbook can be reused instead of
+    # regenerating (agents look it up by ContentHash first). Metadata columns drive
+    # the card UI (source, status, version, use case, tags, author, description).
+    "Playbooks": """
+        CREATE TABLE Playbooks (
+            Id AUTOINCREMENT PRIMARY KEY,
+            PlaybookId TEXT(60), [Name] TEXT(200), [Source] TEXT(20),
+            [Status] TEXT(30), [Version] LONG, UseCase TEXT(160), Tags MEMO,
+            CreatedBy TEXT(120), [Description] MEMO, TriggerText TEXT(255),
+            NodeCount LONG, FlowJson MEMO, ContentHash TEXT(80),
+            CreatedAtMs DOUBLE, UpdatedAtMs DOUBLE, LastUsedAtMs DOUBLE
+        )""",
+    # Token accounting — every LLM generation records its usage so consumption and
+    # cost can be tracked (and reuse from the Playbooks library keeps it down).
+    "TokenUsage": """
+        CREATE TABLE TokenUsage (
+            Id AUTOINCREMENT PRIMARY KEY,
+            Feature TEXT(60), Model TEXT(80), PromptTokens LONG,
+            CompletionTokens LONG, TotalTokens LONG, RefId TEXT(80),
+            CreatedAt DATETIME, CreatedAtMs DOUBLE
+        )""",
 }
 
 
@@ -199,6 +222,17 @@ def _query(sql: str) -> list[dict[str, Any]]:
     conn = _connect()
     cur = conn.cursor()
     cur.execute(sql)
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return rows
+
+
+def _query_params(sql: str, params: list[Any]) -> list[dict[str, Any]]:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(sql, params)
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     cur.close()
@@ -328,6 +362,42 @@ class IndustryProfileIn(BaseModel):
 
 class IndustrySeedIn(BaseModel):
     profiles: list[IndustryProfileIn] = []
+
+
+class PlaybookIn(BaseModel):
+    id: str = ""
+    name: str = ""
+    source: str = "manual"          # 'manual' | 'ai'
+    status: str = "draft"           # draft | active | approved | paused | archived
+    version: int = 1
+    useCase: str = ""
+    tags: list[str] = []
+    createdBy: str = ""
+    description: str = ""
+    trigger: str = ""
+    nodeCount: int = 0
+    flow: dict[str, Any] = {}        # full PlaybookFlow, stored as JSON
+    contentHash: str = ""
+    createdAtMs: float = 0
+    updatedAtMs: float = 0
+    lastUsedAtMs: float = 0
+
+
+class PlaybookDeleteIn(BaseModel):
+    id: str = ""
+
+
+class PlaybookTouchIn(BaseModel):
+    id: str = ""
+
+
+class TokenUsageIn(BaseModel):
+    feature: str = ""
+    model: str = ""
+    promptTokens: int = 0
+    completionTokens: int = 0
+    totalTokens: int = 0
+    refId: str = ""
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -546,6 +616,122 @@ def list_industry_baselines(industry: str = "") -> dict[str, Any]:
         "rank": int(r.get("Rank") or 0),
     } for r in rows]
     return {"ok": True, "count": len(out), "techniques": out}
+
+
+# ── Response Playbooks — live, reusable library ─────────────────────────────────
+def _playbook_row_to_dict(r: dict[str, Any]) -> dict[str, Any]:
+    try:
+        flow = json.loads(r.get("FlowJson") or "{}")
+    except Exception:  # noqa: BLE001
+        flow = {}
+    try:
+        tags = json.loads(r.get("Tags") or "[]")
+    except Exception:  # noqa: BLE001
+        tags = _lines(r.get("Tags"))
+    return {
+        "id": r.get("PlaybookId") or "",
+        "name": r.get("Name") or "",
+        "source": r.get("Source") or "manual",
+        "status": r.get("Status") or "draft",
+        "version": int(r.get("Version") or 1),
+        "useCase": r.get("UseCase") or "",
+        "tags": tags,
+        "createdBy": r.get("CreatedBy") or "",
+        "description": r.get("Description") or "",
+        "trigger": r.get("TriggerText") or "",
+        "nodeCount": int(r.get("NodeCount") or 0),
+        "flow": flow,
+        "contentHash": r.get("ContentHash") or "",
+        "createdAtMs": float(r.get("CreatedAtMs") or 0),
+        "updatedAtMs": float(r.get("UpdatedAtMs") or 0),
+        "lastUsedAtMs": float(r.get("LastUsedAtMs") or 0),
+    }
+
+
+@app.post("/api/playbooks")
+def upsert_playbook(p: PlaybookIn) -> dict[str, Any]:
+    """Insert or replace a playbook by PlaybookId (idempotent upsert)."""
+    now_ms = _now().timestamp() * 1000
+    _exec("DELETE FROM Playbooks WHERE PlaybookId = ?", [p.id])
+    _insert("Playbooks", {
+        "PlaybookId": p.id, "Name": p.name[:200], "Source": p.source,
+        "Status": p.status, "Version": p.version, "UseCase": p.useCase[:160],
+        "Tags": json.dumps(p.tags), "CreatedBy": p.createdBy[:120],
+        "Description": p.description, "TriggerText": (p.trigger or "")[:255],
+        "NodeCount": p.nodeCount, "FlowJson": json.dumps(p.flow),
+        "ContentHash": p.contentHash, "CreatedAtMs": p.createdAtMs or now_ms,
+        "UpdatedAtMs": now_ms, "LastUsedAtMs": p.lastUsedAtMs,
+    })
+    return {"ok": True, "id": p.id}
+
+
+@app.get("/api/playbooks")
+def list_playbooks(limit: int = 500) -> dict[str, Any]:
+    limit = max(1, min(limit, 2000))
+    rows = _query(f"SELECT TOP {limit} * FROM Playbooks ORDER BY UpdatedAtMs DESC")
+    out = [_playbook_row_to_dict(r) for r in rows]
+    return {"ok": True, "count": len(out), "playbooks": out}
+
+
+@app.get("/api/playbooks/lookup")
+def lookup_playbook(hash: str = "") -> dict[str, Any]:
+    """Reuse path — return an existing playbook whose ContentHash matches, if any."""
+    if not hash:
+        return {"ok": True, "found": False, "playbook": None}
+    rows = _query_params(
+        "SELECT TOP 1 * FROM Playbooks WHERE ContentHash = ? ORDER BY UpdatedAtMs DESC",
+        [hash],
+    )
+    if not rows:
+        return {"ok": True, "found": False, "playbook": None}
+    return {"ok": True, "found": True, "playbook": _playbook_row_to_dict(rows[0])}
+
+
+@app.post("/api/playbooks/delete")
+def delete_playbook(body: PlaybookDeleteIn) -> dict[str, Any]:
+    _exec("DELETE FROM Playbooks WHERE PlaybookId = ?", [body.id])
+    return {"ok": True, "id": body.id}
+
+
+@app.post("/api/playbooks/touch")
+def touch_playbook(body: PlaybookTouchIn) -> dict[str, Any]:
+    """Mark a playbook as recently used (drives the 'Recently Used' category)."""
+    _exec("UPDATE Playbooks SET LastUsedAtMs = ? WHERE PlaybookId = ?",
+          [_now().timestamp() * 1000, body.id])
+    return {"ok": True, "id": body.id}
+
+
+# ── Token accounting ────────────────────────────────────────────────────────────
+@app.post("/api/token-usage")
+def add_token_usage(t: TokenUsageIn) -> dict[str, Any]:
+    _insert("TokenUsage", {
+        "Feature": t.feature, "Model": t.model, "PromptTokens": t.promptTokens,
+        "CompletionTokens": t.completionTokens, "TotalTokens": t.totalTokens,
+        "RefId": t.refId, "CreatedAt": _now(), "CreatedAtMs": _now().timestamp() * 1000,
+    })
+    return {"ok": True}
+
+
+@app.get("/api/token-usage/summary")
+def token_usage_summary() -> dict[str, Any]:
+    rows = _query(
+        "SELECT Feature, COUNT(*) AS Calls, SUM(TotalTokens) AS Tokens, "
+        "SUM(PromptTokens) AS PromptT, SUM(CompletionTokens) AS CompT "
+        "FROM TokenUsage GROUP BY Feature"
+    )
+    by_feature = [{
+        "feature": r.get("Feature") or "",
+        "calls": int(r.get("Calls") or 0),
+        "tokens": int(r.get("Tokens") or 0),
+        "promptTokens": int(r.get("PromptT") or 0),
+        "completionTokens": int(r.get("CompT") or 0),
+    } for r in rows]
+    return {
+        "ok": True,
+        "totalCalls": sum(f["calls"] for f in by_feature),
+        "totalTokens": sum(f["tokens"] for f in by_feature),
+        "byFeature": by_feature,
+    }
 
 
 if __name__ == "__main__":
