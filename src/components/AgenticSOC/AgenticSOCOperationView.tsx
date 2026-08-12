@@ -4,6 +4,14 @@ import type { AlertQueueItem, ResolvedIncident } from "../../lib/store";
 import { groqGenerateAlert, parseAlert, buildAlertQueueItem, localGenerateAlert, USE_CASES } from "./alertGenUtils";
 import AcnAssistant from "./AcnAssistant";
 import { saveTriage } from "../../lib/socDb";
+import { orchestrate } from "../../agents/master/orchestrator";
+import type { InvestigationTask } from "../../agents/types";
+import { executeInvestigation, toInsightAnalysis } from "../../agents/execution/executor";
+import type { InvestigationResult } from "../../agents/execution/result-types";
+import { selectSkills } from "../../agents/skills";
+import { enrichAlert, hasAnyProviderEnabled } from "../../agents/enrichment/enrichment-service";
+import type { EnrichmentResult, EnrichStage } from "../../agents/enrichment/enrichment-types";
+import SocIntegrationPanel from "./SocIntegrationPanel";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
@@ -128,6 +136,20 @@ interface ProcessingAgent {
   analyzeSubstage: string;   // current sub-stage label
   showInsights:    boolean;
   insightTab:      "analysis" | "mindmap" | "queries";
+  /** Populated by the Master Agent orchestrator (Step 1+). */
+  task?:           InvestigationTask;
+  /** True when no specialist agent could be matched — routed to General Agent. */
+  noCapableAgent?: boolean;
+  /** Populated after the specialist executes (Step 2+). */
+  result?:         InvestigationResult;
+  /** IOC enrichment results from Step 4. undefined = not yet run; [] = no enrichable IOCs */
+  enrichmentResults?: EnrichmentResult[];
+  /** True while async IOC enrichment is in-flight */
+  enriching?: boolean;
+  /** Pipeline-visible stage status for the Enrich phase */
+  enrichmentStatus?: EnrichStage;
+  /** True once the final specialist run (with enrichment) has completed at Insight — prevents duplicate runs */
+  insightComplete?: boolean;
 }
 interface LogEntry { t: number; procId: string; sev: string; msg: string; }
 interface Metrics  { tp: number; fp: number; escalated: number; totalMttr: number; resolved: number; }
@@ -602,9 +624,10 @@ function SampleQueriesPanel({ queries, agentColor }: { queries: InsightAnalysis[
 }
 
 // ── Insight block ─────────────────────────────────────────────────────────────
-function InsightBlock({ ins, alert, agentColor, isFirstRun, tab, onTabChange }: {
+function InsightBlock({ ins, alert, agentColor, isFirstRun, tab, onTabChange, enrichments }: {
   ins: InsightAnalysis; alert: AlertQueueItem; agentColor: string; isFirstRun: boolean;
   tab: "analysis" | "mindmap" | "queries"; onTabChange: (t: "analysis" | "mindmap" | "queries") => void;
+  enrichments?: EnrichmentResult[];
 }) {
   const verdictColor = ins.verdict === "False Positive" ? C.mut : ins.verdict === "True Positive" ? C.crit : C.high;
   const TABS: { id: "analysis" | "mindmap" | "queries"; label: string; icon: string }[] = [
@@ -676,6 +699,48 @@ function InsightBlock({ ins, alert, agentColor, isFirstRun, tab, onTabChange }: 
                 ))}
               </div>
             </div>
+            {/* ── THREAT INTELLIGENCE — only when enrichment data present ── */}
+            {enrichments && enrichments.some(r => r.status !== "error") && (
+              <div>
+                <div style={{ fontSize: 8.5, color: C.mut2, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, fontWeight: 600 }}>Threat Intelligence</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {enrichments.filter(r => r.status !== "error").map((r, i) => {
+                    const sc =
+                      r.status === "malicious"  ? C.crit :
+                      r.status === "suspicious" ? C.high :
+                      r.status === "clean"      ? C.ok   : C.mut2;
+                    const lbl =
+                      r.status === "malicious"  ? "MALICIOUS"  :
+                      r.status === "suspicious" ? "SUSPICIOUS" :
+                      r.status === "clean"      ? "CLEAN"      : "UNKNOWN";
+                    const truncIoc = r.ioc.length > 30 ? `${r.ioc.slice(0, 13)}…${r.ioc.slice(-12)}` : r.ioc;
+                    const parts: string[] = [];
+                    if (r.details.malicious !== undefined && r.details.vtEngines !== undefined) {
+                      parts.push(`${r.details.malicious}M/${r.details.suspicious ?? 0}S/${r.details.vtEngines}`);
+                    } else if (r.details.vtDetections !== undefined && r.details.vtEngines) {
+                      parts.push(`${r.details.vtDetections}/${r.details.vtEngines}`);
+                    }
+                    if (r.details.country)  parts.push(r.details.country);
+                    if (r.details.asOwner)  parts.push(r.details.asOwner.slice(0, 22));
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 6px", borderRadius: 5, background: `${sc}08`, border: `1px solid ${sc}25` }}>
+                        <span className="soc-mono" style={{ fontSize: 8, padding: "0 4px", borderRadius: 3, background: `${sc}18`, color: sc, fontWeight: 700, flexShrink: 0 }}>{lbl}</span>
+                        <span className="soc-mono" style={{ fontSize: 8.5, color: C.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{truncIoc}</span>
+                        <span className="soc-mono" style={{ fontSize: 7.5, color: C.mut2, flexShrink: 0 }}>{r.iocType}</span>
+                        {parts.length > 0 && <span className="soc-mono" style={{ fontSize: 7.5, color: C.mut, flexShrink: 0 }}>{parts.join(" · ")}</span>}
+                        {r.reportUrl && (
+                          <a href={r.reportUrl} target="_blank" rel="noopener noreferrer"
+                            style={{ fontSize: 7, color: C.live, textDecoration: "none", padding: "1px 4px", borderRadius: 3, border: `1px solid ${C.live}35`, flexShrink: 0 }}>
+                            VT↗
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div style={{ padding: "6px 8px", borderRadius: 6, background: `${C.purple}08`, border: `1px solid ${C.purple}18` }}>
               <span className="soc-mono" style={{ fontSize: 9, color: C.purple }}>reasoning </span>
               <span style={{ fontSize: 9.5, color: C.mut, lineHeight: 1.4 }}>{ins.reasoning}</span>
@@ -755,6 +820,16 @@ function IncidentCard({ a, reduced, onDecide, onToggleInsights, onTabChange }: {
         {al.techniqueId && <span className="soc-mono" style={{ fontSize: 8.5, color: C.med, background: `${C.med}12`, border: `1px solid ${C.med}28`, borderRadius: 4, padding: "1px 5px" }}>{al.techniqueId}</span>}
         {al.tactic      && <span className="soc-mono" style={{ fontSize: 8.5, color: C.purple, background: `${C.purple}12`, border: `1px solid ${C.purple}28`, borderRadius: 4, padding: "1px 5px" }}>{al.tactic}</span>}
         <span className="soc-mono" style={{ fontSize: 8.5, color: C.mut2 }}>{al.sourceHost || al.sourceIp}</span>
+        {/* Enrichment status pill */}
+        {a.enrichmentStatus === "enriching" && (
+          <span className="soc-mono" style={{ fontSize: 7.5, padding: "1px 5px", borderRadius: 4, background: `${C.live}12`, border: `1px solid ${C.live}35`, color: C.live, animation: "soc-pulse 1.2s ease-in-out infinite" }}>◉ TI</span>
+        )}
+        {a.enrichmentStatus === "enriched" && (
+          <span className="soc-mono" style={{ fontSize: 7.5, padding: "1px 5px", borderRadius: 4, background: `${C.live}15`, border: `1px solid ${C.live}40`, color: C.live }}>◈ TI</span>
+        )}
+        {a.enrichmentStatus === "no_public_ioc" && (
+          <span className="soc-mono" style={{ fontSize: 7.5, padding: "1px 5px", borderRadius: 4, background: `${C.mut2}10`, border: `1px solid ${C.mut2}25`, color: C.mut2 }}>○ TI</span>
+        )}
       </div>
 
       {/* Pipeline bar */}
@@ -813,7 +888,7 @@ function IncidentCard({ a, reduced, onDecide, onToggleInsights, onTabChange }: {
       {/* Insight block — with tab support */}
       {a.insights && a.showInsights && (
         <InsightBlock ins={a.insights} alert={a.alert} agentColor={acColor} isFirstRun={a.isFirstRun}
-          tab={a.insightTab} onTabChange={(t) => onTabChange(a.procId, t)} />
+          tab={a.insightTab} onTabChange={(t) => onTabChange(a.procId, t)} enrichments={a.enrichmentResults} />
       )}
 
       {/* Approval gate */}
@@ -1184,7 +1259,10 @@ export default function AgenticSOCOperationView() {
   const [log,          setLog]          = useState<LogEntry[]>([]);
   const [metrics,      setMetrics]      = useState<Metrics>({ tp: 0, fp: 0, escalated: 0, totalMttr: 0, resolved: 0 });
   const [reduced,      setReduced]      = useState(false);
+  const [showIntegrationPanel, setShowIntegrationPanel] = useState(false);
   const apiKey        = useStore(s => s.apiKey);
+  const socIntegrations = useStore(s => s.socIntegrations);
+  const anyProviderOn = socIntegrations.virustotal.enabled || socIntegrations.abuseipdb.enabled || socIntegrations.mock.enabled;
   const queueDepth    = useStore(s => s.alertQueue.length); // reactive, for the queue indicator
   // No source selected by default — the Alert Generator feed auto-ingests
   // regardless of this dropdown, which only opens Paste / Upload / SIEM panels.
@@ -1246,17 +1324,56 @@ export default function AgenticSOCOperationView() {
   }, []);
 
   const ingest = useCallback((alert: AlertQueueItem, source: ProcessingAgent["source"]) => {
-    const procId      = `SOC-${++PROC_ID}`;
-    const agentConf   = AGENT_CONFIG[alert.useCase] ?? AGENT_CONFIG.unknown;
-    const hasSkills   = AGENT_REGISTRY.has(alert.useCase);
+    const procId = `SOC-${++PROC_ID}`;
+
+    // ── Master Agent orchestration (capability-based routing) ────────────────
+    const result = orchestrate(alert, procId);
+
+    // Pipe orchestrator decision logs to the SOC event stream
+    result.logs.forEach(l => {
+      if (l.level === "decision" || l.level === "warn") {
+        pushLog(procId, l.level === "warn" ? "MEDIUM" : alert.severity, `[orchestrator/${l.phase}] ${l.msg}`);
+      }
+    });
+
+    let agentConf: AgentConf;
+    let task: InvestigationTask | undefined;
+    let noCapableAgent = false;
+    let hasSkills: boolean;
+
+    if (result.status === "ASSIGNED") {
+      // Best-match specialist selected
+      const assigned = result.task.assignedAgent;
+      agentConf = assigned.display;
+      task = result.task;
+      hasSkills = AGENT_REGISTRY.has(alert.useCase);
+      pushLog(procId, alert.severity,
+        `master agent → ${assigned.name} [score:${result.task.capabilityScore.toFixed(0)}, matched:${result.task.matchedCapabilities.join("+")}]`);
+
+    } else if (result.status === "NO_CAPABLE_AGENT") {
+      // No specialist qualified — General Agent fallback via orchestrator-created task
+      agentConf = result.task.assignedAgent.display;
+      task = result.task;
+      noCapableAgent = true;
+      hasSkills = false;
+      pushLog(procId, "MEDIUM",
+        `master agent → ${result.task.assignedAgent.name} [no specialist for: ${result.requiredCapabilities.join(", ")}]`);
+
+    } else {
+      // ERROR — graceful degradation to legacy static routing
+      agentConf = AGENT_CONFIG[alert.useCase] ?? AGENT_CONFIG.unknown;
+      hasSkills = AGENT_REGISTRY.has(alert.useCase);
+      pushLog(procId, "HIGH", `master agent error: ${result.error} — using legacy routing`);
+    }
+
     const agent: ProcessingAgent = {
       procId, alert, source, childAgent: agentConf, isFirstRun: !hasSkills,
       stageIdx: 0, note: STAGE_NOTES.Triage[0], insights: null, approval: null,
       spawnAt: Date.now(), done: false, mttr: null, analyzing: false,
       analyzeProgress: 0, analyzeSubstage: "", showInsights: false, insightTab: "analysis",
+      task, noCapableAgent,
     };
     setProcessing(prev => [agent, ...prev].slice(0, 50));
-    pushLog(procId, alert.severity, `master agent → ${agentConf.label} [${hasSkills ? "skills cached" : "first run"}]`);
   }, [pushLog]);
 
   // Pull any 'new' alerts out of the store queue and ingest them. Idempotent —
@@ -1319,7 +1436,7 @@ export default function AgenticSOCOperationView() {
     const tick = setInterval(() => {
       setProcessing(prev =>
         prev.map(a => {
-          if (a.done || a.approval === "pending" || a.analyzing) return a;
+          if (a.done || a.approval === "pending" || a.analyzing || a.enriching) return a;
 
           // 30% chance — rotate note only
           if (Math.random() < 0.30) {
@@ -1329,8 +1446,146 @@ export default function AgenticSOCOperationView() {
 
           const cur = STAGES[a.stageIdx];
 
+          // ── INVESTIGATE STAGE: initial specialist run (pre-enrichment) ────
+          if (cur === "Investigate" && a.task && !a.insightComplete) {
+            const selectedSkills = selectSkills(a.task.assignedAgent.id, a.task.requiredCapabilities);
+            const skillNames = selectedSkills.map(s => s.name).join(" · ") || "general triage";
+            const runningTask: InvestigationTask = { ...a.task, status: "in_progress", updatedAt: Date.now() };
+            pushLog(a.procId, a.alert.severity, `[agent] ${a.task.assignedAgent.name}: skills — ${skillNames}`);
+            pushLog(a.procId, a.alert.severity, `[agent] ${a.task.assignedAgent.name}: initial investigation started`);
+            let initResult: InvestigationResult;
+            try {
+              initResult = executeInvestigation(runningTask, undefined);
+            } catch {
+              return { ...a, task: { ...runningTask, status: "in_progress" }, stageIdx: a.stageIdx + 1, note: STAGE_NOTES.Enrich[0] };
+            }
+            pushLog(a.procId, a.alert.severity,
+              `[agent] ${a.task.assignedAgent.name}: initial assessment — ${initResult.assessment} (${initResult.findings.length} finding(s))`);
+            return {
+              ...a,
+              task: { ...runningTask, status: "in_progress" },
+              result: initResult,
+              stageIdx: a.stageIdx + 1,
+              note: STAGE_NOTES.Enrich[0],
+            };
+          }
+
+          // ── ENRICH STAGE: IOC enrichment (Step 4A) ──────────────────────
+          if (cur === "Enrich" && a.task && a.enrichmentResults === undefined && !a.enriching) {
+            const socCfg = useStore.getState().socIntegrations;
+            if (!hasAnyProviderEnabled(socCfg)) {
+              return { ...a, enrichmentResults: [], enrichmentStatus: "unavailable" as const, stageIdx: a.stageIdx + 1, note: STAGE_NOTES.Insight[0] };
+            }
+            const iocCount = a.task.analysis.iocs.length;
+            pushLog(a.procId, a.alert.severity, `[enrichment] VirusTotal enrichment started — ${iocCount} IOC candidate(s)`);
+            enrichAlert(
+              a.alert,
+              a.task.analysis.iocs,
+              socCfg,
+              (msg) => pushLog(a.procId, a.alert.severity, msg),
+            ).then(results => {
+              const malResults = results.filter(r => r.status === "malicious");
+              const susResults = results.filter(r => r.status === "suspicious");
+              const cached     = results.filter(r => r.cachedAt !== undefined).length;
+              const newStatus: EnrichStage = results.length > 0 ? "enriched" : "no_public_ioc";
+              setProcessing(prev => prev.map(ag => {
+                if (ag.procId !== a.procId) return ag;
+                if (malResults.length > 0) {
+                  pushLog(a.procId, "CRITICAL", `[enrichment] MALICIOUS IOC(s): ${malResults.map(r => r.ioc).join(", ")}`);
+                }
+                if (susResults.length > 0) {
+                  pushLog(a.procId, "HIGH", `[enrichment] SUSPICIOUS IOC(s): ${susResults.map(r => r.ioc).join(", ")}`);
+                }
+                if (results.length > 0 && malResults.length === 0 && susResults.length === 0) {
+                  pushLog(a.procId, a.alert.severity, `[enrichment] ${results.length} IOC(s) enriched — all clean${cached > 0 ? `, ${cached} cached` : ""}`);
+                } else if (results.length === 0) {
+                  pushLog(a.procId, a.alert.severity, "[enrichment] no public IOCs found — skipped");
+                }
+                return { ...ag, enrichmentResults: results, enrichmentStatus: newStatus, enriching: false, stageIdx: ag.stageIdx + 1, note: STAGE_NOTES.Insight[0] };
+              }));
+            }).catch(err => {
+              pushLog(a.procId, "HIGH", `[enrichment] error: ${String(err).slice(0, 80)}`);
+              setProcessing(prev => prev.map(ag =>
+                ag.procId !== a.procId ? ag : { ...ag, enrichmentResults: [], enrichmentStatus: "unavailable" as const, enriching: false, stageIdx: ag.stageIdx + 1, note: STAGE_NOTES.Insight[0] }
+              ));
+            });
+            return { ...a, enriching: true, enrichmentStatus: "enriching" as const, note: STAGE_NOTES.Enrich[Math.floor(Math.random() * STAGE_NOTES.Enrich.length)] };
+          }
+
           // ── INSIGHT STAGE: agent analysis ────────────────────────────────
           if (cur === "Insight") {
+
+            // ── Specialist re-investigation with enrichment ─────────────────
+            if (a.task && !a.insightComplete) {
+              const agentName = a.task.assignedAgent.name;
+              const runningTask: InvestigationTask = { ...a.task, status: "in_progress", updatedAt: Date.now() };
+              const enrichedCount = (a.enrichmentResults ?? []).filter(r => r.status !== "error").length;
+
+              if (enrichedCount > 0) {
+                pushLog(a.procId, a.alert.severity,
+                  `[agent] ${agentName}: re-investigating with threat intelligence — ${enrichedCount} enrichment(s)`);
+              } else {
+                pushLog(a.procId, a.alert.severity,
+                  `[agent] ${agentName}: investigation started (task ${a.task.taskId})`);
+              }
+
+              let invResult: InvestigationResult;
+              try {
+                invResult = executeInvestigation(runningTask, a.enrichmentResults);
+              } catch (err) {
+                pushLog(a.procId, "HIGH", `[agent] ${agentName}: investigation threw unexpectedly — ${String(err).slice(0, 60)}`);
+                return { ...a, task: { ...runningTask, status: "failed", updatedAt: Date.now() }, insightComplete: true };
+              }
+
+              const completedTask: InvestigationTask = {
+                ...runningTask,
+                status: invResult.status === "COMPLETED" ? "completed" : "failed",
+                updatedAt: Date.now(),
+              };
+
+              if (invResult.status === "FAILED") {
+                pushLog(a.procId, "HIGH",
+                  `[agent] ${agentName}: investigation FAILED — ${invResult.errors?.[0] ?? "unknown error"}`);
+                return {
+                  ...a, task: completedTask, result: invResult, insightComplete: true,
+                  stageIdx: 4, note: "investigation failed — needs manual review",
+                };
+              }
+
+              pushLog(a.procId, a.alert.severity,
+                `[agent] ${agentName}: investigation COMPLETED — ${invResult.verdict} (${Math.round(invResult.confidence * 100)}% conf, risk ${invResult.riskScore})`);
+
+              const mttr = Math.round((Date.now() - a.spawnAt) / 1000);
+              const insight = toInsightAnalysis(invResult, a.alert);
+              const needsApproval = insight.verdict !== "False Positive" && a.alert.severity === "CRITICAL";
+
+              if (needsApproval) {
+                pushLog(a.procId, a.alert.severity, "critical — awaiting analyst approval");
+                return {
+                  ...a, task: completedTask, result: invResult, insightComplete: true,
+                  insights: insight, approval: "pending",
+                  note: "destructive action — needs sign-off",
+                  isFirstRun: false, showInsights: true, mttr,
+                };
+              }
+
+              const isFP = insight.verdict === "False Positive";
+              setMetrics(m => ({
+                ...m,
+                tp: !isFP ? m.tp + 1 : m.tp,
+                fp: isFP ? m.fp + 1 : m.fp,
+                totalMttr: m.totalMttr + mttr,
+                resolved: m.resolved + 1,
+              }));
+              updateAlertStatus(a.alert.id, isFP ? "dismissed" : "dispatched");
+              pushResolvedIncident(buildResolved({ ...a, isFirstRun: false }, insight, mttr));
+              return {
+                ...a, task: completedTask, result: invResult, insightComplete: true,
+                insights: insight, stageIdx: 4,
+                note: STAGE_NOTES.Respond[0], isFirstRun: false, showInsights: false, mttr,
+              };
+            }
+
             const skills = AGENT_REGISTRY.get(a.alert.useCase);
 
             if (skills) {
@@ -1539,7 +1794,28 @@ export default function AgenticSOCOperationView() {
         <Stat label="Active"   value={active}  color={C.live} />
         <Stat label="Approval" value={pending} color={pending ? C.high : C.mut2} blink={pending > 0} />
         <Stat label="Resolved" value={metrics.resolved} color={C.ok} />
+        <div style={{ width: 1, height: 26, background: C.line }} />
+        {/* Threat Intel integration button */}
+        <button
+          className="soc-btn"
+          onClick={() => setShowIntegrationPanel(true)}
+          title="Configure VirusTotal / AbuseIPDB enrichment"
+          style={{
+            display: "flex", alignItems: "center", gap: 5, padding: "4px 10px",
+            background: anyProviderOn ? `${C.live}18` : C.panelHi,
+            border: `1px solid ${anyProviderOn ? C.live : C.line}`,
+            borderRadius: 7, cursor: "pointer",
+          }}
+        >
+          <span style={{ fontSize: 11, color: anyProviderOn ? C.live : C.mut }}>◎</span>
+          <span style={{ fontSize: 10, color: anyProviderOn ? C.live : C.mut, fontWeight: 600, letterSpacing: 0.3 }}>
+            {anyProviderOn ? "Intel ON" : "Threat Intel"}
+          </span>
+        </button>
       </div>
+
+      {/* ── Threat Intel integration panel (modal) ── */}
+      {showIntegrationPanel && <SocIntegrationPanel onClose={() => setShowIntegrationPanel(false)} />}
 
       {/* ── Ingestion panel ── */}
       <IngestionPanel source={activeSource} onIngest={ingest} />

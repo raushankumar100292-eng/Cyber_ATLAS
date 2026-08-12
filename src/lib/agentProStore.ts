@@ -13,6 +13,8 @@ export interface AgentProState {
   disconnecting: boolean
   error: string | null
   enabledProvider: AiProvider | null
+  /** Claude CLI availability (Agent Pro ↔ Claude), distinct from session health. null = unknown/checking. */
+  claudeAvailable: boolean | null
 }
 
 interface AgentProActions {
@@ -23,6 +25,7 @@ interface AgentProActions {
   setConnecting: (v: boolean) => void
   setDisconnecting: (v: boolean) => void
   setError: (e: string | null) => void
+  setClaudeAvailable: (v: boolean | null) => void
   toggleProvider: (p: AiProvider) => void
 }
 
@@ -36,6 +39,7 @@ export const useAgentProStore = create<AgentProState & AgentProActions>(set => (
   disconnecting: false,
   error: null,
   enabledProvider: null,
+  claudeAvailable: null,
 
   setMasterAgentUrl: masterAgentUrl => set({ masterAgentUrl }),
   setMasterAgentId: masterAgentId => set({ masterAgentId }),
@@ -49,6 +53,7 @@ export const useAgentProStore = create<AgentProState & AgentProActions>(set => (
       sessionId: null,
       connectedAt: null,
       enabledProvider: null,
+      claudeAvailable: null,
       error: null,
       connecting: false,
       disconnecting: false,
@@ -57,6 +62,7 @@ export const useAgentProStore = create<AgentProState & AgentProActions>(set => (
   setConnecting: connecting => set({ connecting }),
   setDisconnecting: disconnecting => set({ disconnecting }),
   setError: error => set({ error, connecting: false, disconnecting: false }),
+  setClaudeAvailable: claudeAvailable => set({ claudeAvailable }),
 
   toggleProvider: p =>
     set(state => ({

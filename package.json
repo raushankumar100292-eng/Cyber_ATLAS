@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "guard": "node scripts/server-guard.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "data": "node scripts/build-data.mjs",

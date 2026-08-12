@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Compass, ShieldAlert, Server, Users, Wrench, Radar,
-  FileText, GraduationCap, ChevronRight, ChevronDown,
+  FileText, GraduationCap, ChevronRight,
   Sparkles, Loader2, Copy, Check,
   RotateCcw, ArrowRight, Lock,
 } from 'lucide-react'
@@ -468,8 +468,13 @@ export default function ArchitectView() {
     <div className="h-full flex overflow-hidden">
 
       {/* ── Left sidebar ──────────────────────────────────────────────────────── */}
-      <div className="w-72 shrink-0 flex flex-col border-r border-white/[0.06] overflow-hidden"
-        style={{ background: 'rgba(7,11,20,0.6)' }}>
+      <div className="w-72 shrink-0 flex flex-col border-r border-white/[0.08] overflow-hidden"
+        style={{
+          background: `
+            radial-gradient(115% 34% at 50% 0%, rgba(56,189,248,0.06), transparent 55%),
+            linear-gradient(180deg, #06080e 0%, #030509 100%)
+          `,
+        }}>
 
         {/* Header */}
         <div className="px-4 pt-5 pb-4 border-b border-white/[0.06]">
@@ -477,26 +482,36 @@ export default function ArchitectView() {
             <Lock className="w-4 h-4 text-slate-400" />
             <span className="text-sm font-semibold text-white">Security Architect</span>
           </div>
-          <p className="text-[11px] text-slate-600 leading-relaxed">
+          <p className="text-[11px] text-slate-300 leading-relaxed">
             {CATEGORIES.reduce((s, c) => s + c.tasks.length, 0)} skills across {CATEGORIES.length} domains
           </p>
         </div>
 
         {/* Category list */}
-        <div className="flex-1 overflow-y-auto py-2">
+        <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
           {CATEGORIES.map(cat => {
             const isOpen = expandedCat === cat.id
             return (
               <div key={cat.id}>
                 <button
                   onClick={() => setExpandedCat(isOpen ? '' : cat.id)}
-                  className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-white/[0.03] transition-colors text-left">
-                  <cat.icon className="w-3.5 h-3.5 shrink-0" style={{ color: cat.color, opacity: 0.7 }} />
-                  <span className="flex-1 text-[12px] font-medium text-slate-400 leading-tight">{cat.label}</span>
-                  <span className="text-[10px] font-mono text-slate-700 mr-1">{cat.tasks.length}</span>
-                  {isOpen
-                    ? <ChevronDown className="w-3 h-3 text-slate-700" />
-                    : <ChevronRight className="w-3 h-3 text-slate-700" />}
+                  className="group w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl transition-all text-left"
+                  style={{ background: isOpen ? `${cat.color}14` : 'transparent' }}
+                  onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = 'rgba(255,255,255,0.045)' }}
+                  onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = 'transparent' }}>
+                  <span className="flex items-center justify-center w-7 h-7 rounded-lg shrink-0"
+                    style={{ background: `${cat.color}1f`, border: `1px solid ${cat.color}33` }}>
+                    <cat.icon className="w-3.5 h-3.5" style={{ color: cat.color }} />
+                  </span>
+                  <span className="flex-1 text-[13px] font-medium leading-tight tracking-[0.005em]"
+                    style={{ color: isOpen ? '#ffffff' : '#f1f5f9' }}>{cat.label}</span>
+                  <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-semibold tabular-nums"
+                    style={{
+                      background: isOpen ? `${cat.color}29` : 'rgba(255,255,255,0.07)',
+                      color:      isOpen ? cat.color : '#cbd5e1',
+                    }}>{cat.tasks.length}</span>
+                  <ChevronRight className="w-3.5 h-3.5 shrink-0 transition-transform"
+                    style={{ color: isOpen ? cat.color : '#94a3b8', transform: isOpen ? 'rotate(90deg)' : 'none' }} />
                 </button>
 
                 <AnimatePresence>
@@ -508,12 +523,14 @@ export default function ArchitectView() {
                         return (
                           <button key={task.id}
                             onClick={() => handleSelectTask(task)}
-                            className="w-full text-left px-4 py-2 pl-10 text-[11px] leading-snug transition-all"
+                            className="w-full text-left pl-11 pr-3 py-2 mt-0.5 text-[12px] leading-[1.45] tracking-[0.005em] rounded-lg transition-all"
                             style={{
-                              color: isActive ? cat.color : '#64748b',
-                              background: isActive ? `${cat.color}08` : 'transparent',
-                              borderLeft: isActive ? `2px solid ${cat.color}` : '2px solid transparent',
-                            }}>
+                              color:      isActive ? cat.color : '#e2e8f0',
+                              background:  isActive ? `${cat.color}14` : 'transparent',
+                              fontWeight:  isActive ? 600 : 500,
+                            }}
+                            onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = '#ffffff' } }}
+                            onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#e2e8f0' } }}>
                             {task.title}
                           </button>
                         )
@@ -551,12 +568,12 @@ export default function ArchitectView() {
                     onClick={() => { setExpandedCat(cat.id); handleSelectTask(cat.tasks[0]) }}
                     className="flex flex-col items-center gap-2 p-4 rounded-xl border transition-all hover:scale-[1.02]"
                     style={{ borderColor: `${cat.color}20`, background: cat.accent }}>
-                    <cat.icon className="w-5 h-5" style={{ color: cat.color, opacity: 0.7 }} />
+                    <cat.icon className="w-5 h-5" style={{ color: cat.color, opacity: 0.9 }} />
                     <span className="text-[10px] font-semibold text-center leading-tight"
-                      style={{ color: cat.color, opacity: 0.8 }}>
+                      style={{ color: cat.color }}>
                       {cat.label.split(' ').slice(0, 2).join(' ')}
                     </span>
-                    <span className="text-[10px] font-mono text-slate-700">{cat.tasks.length} skills</span>
+                    <span className="text-[10px] font-mono text-slate-400">{cat.tasks.length} skills</span>
                   </button>
                 ))}
               </div>

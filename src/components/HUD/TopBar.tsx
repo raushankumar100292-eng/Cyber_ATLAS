@@ -1,5 +1,5 @@
 import {
-  Globe, Grid3x3, Shield, ChevronDown, Search,
+  Globe, Grid3x3, ChevronDown, Search,
   Upload as UploadIcon, ArrowRightLeft, Code2, Zap,
   Inbox, BarChart3, Layers, Eye, Sparkles, Network,
   KeyRound, CheckCircle2, EyeOff, Check, FolderSearch, ClipboardCheck,
@@ -11,6 +11,7 @@ import type { Role } from '../../lib/types'
 import type { ViewMode } from '../../lib/store'
 import { clsx } from 'clsx'
 import { AnimatePresence, motion } from 'framer-motion'
+import atlasLogo from '../../assets/atlas-logo-horizontal-dark.svg'
 
 // ── Read URL params on mount and apply to store ───────────────────────────────
 function useUrlParams() {
@@ -314,21 +315,15 @@ export default function TopBar() {
   return (
     <header className="topbar h-14 flex items-center px-5 gap-4 shrink-0 z-30">
       {/* Logo */}
-      <div className="flex items-center gap-2.5 shrink-0 select-none">
-        <div className="w-7 h-7 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center">
-          <Shield className="w-4 h-4 text-cyan-400" />
-        </div>
-        <div className="flex items-baseline gap-2">
-          <span className="font-display text-[11px] font-bold tracking-[0.2em] text-white">ATLAS</span>
-          <span className="text-[11px] text-slate-600 font-medium tracking-wide">Coverage Navigator</span>
-        </div>
+      <div className="flex items-center shrink-0 select-none">
+        <img src={atlasLogo} alt="ATLAS" className="h-7 w-auto" draggable={false} />
       </div>
 
       <div className="h-5 w-px bg-white/[0.08] shrink-0" />
 
       {/* Navigation */}
       <nav className="flex items-center gap-0.5 shrink-0">
-        {role !== 'purple' && (
+        {role !== 'purple' && role !== 'architect' && (
           <>
             <NavBtn label="Globe View"    icon={<Globe          className="w-3.5 h-3.5" />} active={view==='globe'}  viewTarget="globe"  onClick={() => setView('globe')} />
             <NavBtn label="Matrix View"   icon={<Grid3x3        className="w-3.5 h-3.5" />} active={view==='matrix'} viewTarget="matrix" onClick={() => setView('matrix')} />
@@ -338,8 +333,12 @@ export default function TopBar() {
           </>
         )}
 
-        <NavBtn label="Alert Generator" icon={<Zap className="w-3.5 h-3.5" />} active={view==='alert-gen'} viewTarget="alert-gen" onClick={() => setView('alert-gen')} />
-        <AlertQueueTab />
+        {role !== 'architect' && (
+          <>
+            <NavBtn label="Alert Generator" icon={<Zap className="w-3.5 h-3.5" />} active={view==='alert-gen'} viewTarget="alert-gen" onClick={() => setView('alert-gen')} />
+            <AlertQueueTab />
+          </>
+        )}
 
         {/* Agentic SOC sub-tabs */}
         {role === 'purple' && (

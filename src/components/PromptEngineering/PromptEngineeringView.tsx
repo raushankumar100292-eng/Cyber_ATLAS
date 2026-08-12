@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Wand2, Copy, Check, RefreshCw, ChevronDown, X,
@@ -13,8 +13,15 @@ import {
   REPHRASE_STYLE_META,
 } from '../../lib/splKqlGroq'
 import { useAgentProStore } from '../../lib/agentProStore'
-import { executeOnMasterAgent } from '../../services/masterAgentService'
+import {
+  executeOnMasterAgent,
+  listTasks,
+  getTaskThread,
+  type TaskSummary,
+  type ThreadMessage,
+} from '../../services/masterAgentService'
 import AgentProConnectionPanel from './AgentProConnectionPanel'
+import ServerHealthWidget from './ServerHealthWidget'
 
 const STYLE_COLORS: Record<RephraseStyle, string> = {
   'clearer':          'text-cyan-700 bg-cyan-50 border-cyan-200',
@@ -76,7 +83,7 @@ function HistoryItem({
 // ── Main view ─────────────────────────────────────────────────────────────────
 export default function PromptEngineeringView() {
   const apiKey   = useStore(s => s.apiKey)
-  const { connected, enabledProvider, sessionId, masterAgentUrl } = useAgentProStore()
+  const { connected, enabledProvider, sessionId, masterAgentUrl, claudeAvailable } = useAgentProStore()
 
   const [prompt, setPrompt]       = useState('')
   const [context, setContext]     = useState('')
@@ -89,25 +96,55 @@ export default function PromptEngineeringView() {
   const [showContext, setShowContext] = useState(false)
 
   // ── Agent Pro execution state ──
-  const [agentResponse, setAgentResponse] = useState('')
   const [agentRunning, setAgentRunning]   = useState(false)
   const [agentError, setAgentError]       = useState('')
+  const [taskId, setTaskId]               = useState<string | null>(null) // active conversation
+  const [messages, setMessages]           = useState<ThreadMessage[]>([])  // active thread
+  const [conversations, setConversations] = useState<TaskSummary[]>([])    // sidebar list
+  const [sidebarTab, setSidebarTab]       = useState<'conversations' | 'history'>('conversations')
 
   const abortRef = useRef(false)
 
+  // Load the conversation list whenever connected.
+  const refreshConversations = async () => {
+    if (!connected || !sessionId) return
+    setConversations(await listTasks(masterAgentUrl, sessionId))
+  }
+  useEffect(() => { refreshConversations() }, [connected, sessionId, masterAgentUrl])
+
   const canRephrase  = !!apiKey && !!prompt.trim() && !streaming
-  const canSendViaAgentPro = connected && !!enabledProvider && !!prompt.trim()
+  // Claude CLI must not be known-down (null = still checking, allow optimistically)
+  const canSendViaAgentPro = connected && !!enabledProvider && !!prompt.trim() && claudeAvailable !== false
 
   async function handleSendViaAgentPro() {
     if (!canSendViaAgentPro || agentRunning) return
     if (!sessionId) { setAgentError('No active session — reconnect to Agent Pro.'); return }
+    const sent = prompt.trim()
     setAgentRunning(true)
-    setAgentResponse('')
     setAgentError('')
-    const result = await executeOnMasterAgent(masterAgentUrl, sessionId, prompt.trim())
+    setMessages(prev => [...prev, { role: 'user', content: sent }]) // optimistic
+    const result = await executeOnMasterAgent(masterAgentUrl, sessionId, sent, taskId ?? undefined)
     setAgentRunning(false)
-    if (result.success) setAgentResponse(result.response ?? '')
-    else setAgentError(result.error ?? 'Execution failed')
+    if (result.success) {
+      setMessages(prev => [...prev, { role: 'assistant', content: result.response ?? '' }])
+      if (result.taskId) setTaskId(result.taskId)  // keep / start the thread
+      setPrompt('')
+      refreshConversations()
+    } else {
+      setMessages(prev => prev.slice(0, -1))        // roll back the optimistic user turn
+      setAgentError(result.error ?? 'Execution failed')
+    }
+  }
+
+  function handleNewConversation() {
+    setTaskId(null); setMessages([]); setAgentError('')
+  }
+
+  async function openConversation(id: string) {
+    if (!sessionId) return
+    setTaskId(id)
+    setAgentError('')
+    setMessages(await getTaskThread(masterAgentUrl, sessionId, id))
   }
 
   async function handleRephrase() {
@@ -165,6 +202,9 @@ export default function PromptEngineeringView() {
           <div>
             <p className="text-sm font-bold text-slate-800">Prompt Engineering Studio</p>
             <p className="text-xs text-slate-500">Write, rephrase and refine AI prompts with style guidance</p>
+          </div>
+          <div className="ml-auto">
+            <ServerHealthWidget />
           </div>
         </div>
 
@@ -259,9 +299,11 @@ export default function PromptEngineeringView() {
                 title={
                   !connected
                     ? 'Connect to Agent Pro before using AI providers.'
-                    : !enabledProvider
-                      ? 'Enable a provider (Claude Code CLI) first.'
-                      : 'Run this prompt on the connected agent'
+                    : claudeAvailable === false
+                      ? 'Claude CLI is unavailable — request cannot be executed.'
+                      : !enabledProvider
+                        ? 'Enable a provider (Claude Code CLI) first.'
+                        : 'Run this prompt on the connected agent'
                 }
                 className={clsx(
                   'flex items-center gap-2 h-10 px-5 rounded-xl font-semibold text-sm transition-all border',
@@ -334,23 +376,41 @@ export default function PromptEngineeringView() {
             )}
           </AnimatePresence>
 
-          {/* ── Agent Pro response ── */}
-          {(agentResponse || agentRunning || agentError) && (
+          {/* ── Agent Pro conversation (thread) ── */}
+          {(messages.length > 0 || agentRunning || agentError) && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
               className="bg-white rounded-2xl border border-emerald-200 shadow-sm overflow-hidden">
               <div className="px-4 py-3 border-b border-emerald-100 bg-emerald-50/60 flex items-center gap-2">
                 <Send className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-xs font-semibold text-emerald-800">Agent Pro Response</span>
-                {agentRunning && <span className="text-[10px] text-slate-400">running on the connected agent…</span>}
-                {agentResponse && !agentRunning && (
-                  <button onClick={() => navigator.clipboard.writeText(agentResponse)}
+                <span className="text-xs font-semibold text-emerald-800">Agent Pro Conversation</span>
+                {taskId && (
+                  <span className="text-[10px] font-medium text-violet-600 bg-violet-50 border border-violet-200 rounded px-1.5 py-0.5" title={taskId}>
+                    {messages.length} message{messages.length === 1 ? '' : 's'}
+                  </span>
+                )}
+                {agentRunning && <span className="text-[10px] text-slate-400">running…</span>}
+                {(taskId || messages.length > 0) && !agentRunning && (
+                  <button onClick={handleNewConversation}
                     className="ml-auto flex items-center gap-1 h-6 px-2.5 rounded-md text-[11px] bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
-                    <Copy className="w-3 h-3" /> Copy
+                    <Plus className="w-3 h-3" /> New
                   </button>
                 )}
               </div>
-              <div className="px-4 py-4 min-h-[64px]">
-                {agentRunning && !agentResponse && (
+              <div className="px-4 py-4 space-y-3 max-h-[440px] overflow-auto">
+                {messages.map((m, i) => (
+                  <div key={i} className={clsx('flex flex-col gap-1', m.role === 'user' ? 'items-end' : 'items-start')}>
+                    <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                      {m.role === 'user' ? 'You' : 'Agent'}
+                    </span>
+                    <div className={clsx('max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed',
+                      m.role === 'user'
+                        ? 'bg-violet-50 border border-violet-100 text-slate-800'
+                        : 'bg-slate-50 border border-slate-200 text-slate-800 font-mono')}>
+                      {m.content}
+                    </div>
+                  </div>
+                ))}
+                {agentRunning && (
                   <div className="flex items-center gap-2 text-xs text-slate-400">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" /> Waiting for the agent… (Claude CLI can take ~20–30s)
                   </div>
@@ -360,15 +420,12 @@ export default function PromptEngineeringView() {
                     <X className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {agentError}
                   </div>
                 )}
-                {agentResponse && (
-                  <p className="font-mono text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">{agentResponse}</p>
-                )}
               </div>
             </motion.div>
           )}
 
           {/* ── Tips ── */}
-          {!prompt && !rephrased && (
+          {!prompt && !rephrased && messages.length === 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
                 { icon: '🎯', title: 'Be specific', tip: 'Describe the exact output format, length, and constraints you need.' },
@@ -387,35 +444,79 @@ export default function PromptEngineeringView() {
         </div>
       </div>
 
-      {/* ── Right: History sidebar ── */}
+      {/* ── Right sidebar: Conversations + Rephrase History ── */}
       <div className="w-72 shrink-0 border-l border-slate-200 bg-white flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between shrink-0">
-          <span className="text-xs font-semibold text-slate-700">History</span>
-          {history.length > 0 && (
-            <button onClick={() => setHistory([])}
-              className="text-[11px] text-slate-400 hover:text-red-500 transition-colors">
-              Clear all
+        {/* Tabs */}
+        <div className="flex items-center gap-1 px-3 pt-3 shrink-0">
+          {(['conversations', 'history'] as const).map(tab => (
+            <button key={tab} onClick={() => setSidebarTab(tab)}
+              className={clsx('flex-1 h-7 rounded-lg text-[11px] font-semibold transition-colors',
+                sidebarTab === tab ? 'bg-slate-100 text-slate-700' : 'text-slate-400 hover:text-slate-600')}>
+              {tab === 'conversations' ? 'Conversations' : 'History'}
             </button>
-          )}
+          ))}
         </div>
 
-        <div className="flex-1 overflow-auto p-3 space-y-2">
-          {history.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-40 gap-2 text-center">
-              <BookOpen className="w-6 h-6 text-slate-200" />
-              <p className="text-xs text-slate-400">Rephrased prompts appear here</p>
+        {sidebarTab === 'conversations' ? (
+          <>
+            <div className="px-3 pt-2 pb-2 shrink-0">
+              <button onClick={handleNewConversation} disabled={!connected}
+                className={clsx('w-full h-8 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border transition-colors',
+                  connected ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed')}>
+                <Plus className="w-3 h-3" /> New conversation
+              </button>
             </div>
-          ) : (
-            history.map(entry => (
-              <HistoryItem
-                key={entry.id}
-                entry={entry}
-                onRestore={() => { setPrompt(entry.rephrased); setRephrased('') }}
-                onDelete={() => setHistory(prev => prev.filter(e => e.id !== entry.id))}
-              />
-            ))
-          )}
-        </div>
+            <div className="flex-1 overflow-auto px-3 pb-3 space-y-1.5">
+              {!connected ? (
+                <div className="flex flex-col items-center justify-center h-40 gap-2 text-center">
+                  <BookOpen className="w-6 h-6 text-slate-200" />
+                  <p className="text-xs text-slate-400">Connect to Agent Pro to see conversations</p>
+                </div>
+              ) : conversations.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 gap-2 text-center">
+                  <BookOpen className="w-6 h-6 text-slate-200" />
+                  <p className="text-xs text-slate-400">No conversations yet</p>
+                </div>
+              ) : (
+                conversations.map(c => (
+                  <button key={c.taskId} onClick={() => openConversation(c.taskId)}
+                    className={clsx('w-full text-left rounded-xl border px-3 py-2 transition-colors',
+                      taskId === c.taskId ? 'border-emerald-300 bg-emerald-50/60' : 'border-slate-200 bg-white hover:bg-slate-50')}>
+                    <p className="text-xs font-medium text-slate-700 truncate">{c.title || 'Untitled conversation'}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">{c.turns} message{c.turns === 1 ? '' : 's'}</p>
+                  </button>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between shrink-0">
+              <span className="text-[11px] font-semibold text-slate-500">Rephrase history</span>
+              {history.length > 0 && (
+                <button onClick={() => setHistory([])}
+                  className="text-[11px] text-slate-400 hover:text-red-500 transition-colors">Clear all</button>
+              )}
+            </div>
+            <div className="flex-1 overflow-auto p-3 space-y-2">
+              {history.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 gap-2 text-center">
+                  <BookOpen className="w-6 h-6 text-slate-200" />
+                  <p className="text-xs text-slate-400">Rephrased prompts appear here</p>
+                </div>
+              ) : (
+                history.map(entry => (
+                  <HistoryItem
+                    key={entry.id}
+                    entry={entry}
+                    onRestore={() => { setPrompt(entry.rephrased); setRephrased('') }}
+                    onDelete={() => setHistory(prev => prev.filter(e => e.id !== entry.id))}
+                  />
+                ))
+              )}
+            </div>
+          </>
+        )}
       </div>
 
     </div>

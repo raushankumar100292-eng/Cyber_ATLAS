@@ -107,6 +107,17 @@ interface AppState {
   geminiKey: string
   setGeminiKey: (key: string) => void
 
+  // SOC threat-intel integration — API keys for VT / AbuseIPDB (runtime only, never commit)
+  socIntegrations: {
+    virustotal: { enabled: boolean; apiKey: string }
+    abuseipdb:  { enabled: boolean; apiKey: string }
+    mock:       { enabled: boolean; apiKey: string }
+  }
+  setSocIntegration: (
+    provider: 'virustotal' | 'abuseipdb' | 'mock',
+    cfg: { enabled?: boolean; apiKey?: string },
+  ) => void
+
   // live coverage data (applied to dashboard)
   coverage: CoverageDataset | null
   coverageMap: Map<string, CoverageEntry>
@@ -178,6 +189,35 @@ function buildMap(data: CoverageDataset | null): Map<string, CoverageEntry> {
   return new Map(data.entries.map(e => [e.techniqueId, e]))
 }
 
+// SOC integrations persisted to localStorage so API keys survive page reloads.
+// The store holds them in memory; they are never committed to source.
+const SOC_INTEGRATIONS_KEY = 'atlas_soc_integrations'
+type SocIntegrationsShape = {
+  virustotal: { enabled: boolean; apiKey: string }
+  abuseipdb:  { enabled: boolean; apiKey: string }
+  mock:       { enabled: boolean; apiKey: string }
+}
+const SOC_INTEGRATIONS_DEFAULT: SocIntegrationsShape = {
+  virustotal: { enabled: false, apiKey: '' },
+  abuseipdb:  { enabled: false, apiKey: '' },
+  mock:       { enabled: false, apiKey: '' },
+}
+function loadSocIntegrations(): SocIntegrationsShape {
+  try {
+    const raw = localStorage.getItem(SOC_INTEGRATIONS_KEY)
+    if (!raw) return { ...SOC_INTEGRATIONS_DEFAULT }
+    const parsed = JSON.parse(raw) as Partial<SocIntegrationsShape>
+    return {
+      virustotal: { ...SOC_INTEGRATIONS_DEFAULT.virustotal, ...(parsed.virustotal ?? {}) },
+      abuseipdb:  { ...SOC_INTEGRATIONS_DEFAULT.abuseipdb,  ...(parsed.abuseipdb  ?? {}) },
+      mock:       { ...SOC_INTEGRATIONS_DEFAULT.mock,       ...(parsed.mock        ?? {}) },
+    }
+  } catch { return { ...SOC_INTEGRATIONS_DEFAULT } }
+}
+function saveSocIntegrations(cfg: SocIntegrationsShape) {
+  try { localStorage.setItem(SOC_INTEGRATIONS_KEY, JSON.stringify(cfg)) } catch { /* ignore quota */ }
+}
+
 const TRAINED_AGENTS_KEY = 'atlas_trained_agents'
 function loadTrainedAgents(): TrainedAgentSkill[] {
   try {
@@ -247,6 +287,7 @@ export const useStore = create<AppState>((set, get) => ({
   uploadOpen: false,
   apiKey: (localStorage.getItem('atlas_groq_key') ?? '').trim(),
   geminiKey: (localStorage.getItem('atlas_gemini_key') ?? '').trim(),
+  socIntegrations: loadSocIntegrations(),
 
   coverage: null,
   coverageMap: new Map(),
@@ -350,6 +391,14 @@ export const useStore = create<AppState>((set, get) => ({
   // localStorage reads) sees the same canonical, whitespace-free key.
   setApiKey: (key) => { const k = key.trim(); localStorage.setItem('atlas_groq_key', k); set({ apiKey: k }) },
   setGeminiKey: (key) => { const k = key.trim(); localStorage.setItem('atlas_gemini_key', k); set({ geminiKey: k }) },
+  setSocIntegration: (provider, cfg) => {
+    const next: SocIntegrationsShape = {
+      ...useStore.getState().socIntegrations,
+      [provider]: { ...useStore.getState().socIntegrations[provider], ...cfg },
+    }
+    saveSocIntegrations(next)
+    set({ socIntegrations: next })
+  },
   setCoverage: (data) => set({ coverage: data, coverageMap: buildMap(data), useCaseTacticMap: new Map() }),
   setUseCases: (useCases, analysis) => set({ useCases, useCaseAnalysis: analysis }),
   clearSelection: () => set({ selectedTacticId: null, selectedTechniqueId: null }),

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ChevronDown, Plug, PlugZap, AlertTriangle,
@@ -9,6 +9,7 @@ import { useAgentProStore, type AiProvider } from '../../lib/agentProStore'
 import {
   connectToMasterAgent,
   disconnectFromMasterAgent,
+  getMasterStatus,
 } from '../../services/masterAgentService'
 
 // ── Provider metadata ─────────────────────────────────────────────────────────
@@ -82,6 +83,7 @@ export default function AgentProConnectionPanel() {
     connecting, disconnecting,
     error,
     enabledProvider, toggleProvider,
+    claudeAvailable, setClaudeAvailable,
     setConnected, setDisconnected,
     setConnecting, setDisconnecting, setError,
   } = useAgentProStore()
@@ -89,6 +91,19 @@ export default function AgentProConnectionPanel() {
   const [open, setOpen]         = useState(true)
   const [secretKey, setSecretKey] = useState('')
   const [showKey, setShowKey]   = useState(false)
+
+  // ── Poll Claude CLI health while connected (distinct from session health) ──
+  useEffect(() => {
+    if (!connected || !sessionId) return
+    let cancelled = false
+    const check = async () => {
+      const status = await getMasterStatus(masterAgentUrl, sessionId)
+      if (!cancelled) setClaudeAvailable(status.claudeAvailable)
+    }
+    check()
+    const iv = setInterval(check, 15000)
+    return () => { cancelled = true; clearInterval(iv) }
+  }, [connected, sessionId, masterAgentUrl, setClaudeAvailable])
 
   // ── Connect ────────────────────────────────────────────────────────────────
   async function handleConnect() {
@@ -325,6 +340,39 @@ export default function AgentProConnectionPanel() {
                   )}
                 </div>
               </div>
+
+              {/* ── System status: Agent Pro vs Claude CLI (distinct signals) ── */}
+              {connected && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-slate-600">Agent Pro</span>
+                    <span className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_1px_rgba(52,211,153,0.5)]" /> Connected
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-slate-600">Claude CLI</span>
+                    {claudeAvailable === null ? (
+                      <span className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                        <Loader2 className="w-3 h-3 animate-spin" /> Checking…
+                      </span>
+                    ) : claudeAvailable ? (
+                      <span className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_1px_rgba(52,211,153,0.5)]" /> Available
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-[11px] font-semibold text-red-600">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_5px_1px_rgba(239,68,68,0.5)]" /> Unavailable
+                      </span>
+                    )}
+                  </div>
+                  {claudeAvailable === false && (
+                    <p className="text-[10px] text-red-500 pt-0.5 flex items-center gap-1">
+                      <AlertTriangle className="w-2.5 h-2.5 shrink-0" /> Request cannot be executed — Claude CLI is unavailable.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* ── Divider ── */}
               <div className="border-t border-slate-100" />
